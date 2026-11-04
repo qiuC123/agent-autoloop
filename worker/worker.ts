@@ -49,6 +49,7 @@ type Entry = {
   attempt: number;
   job: Job;
   dir: string;
+  folder?: string;
   prompt: string;
   turn: number;
   session: string;
@@ -94,13 +95,13 @@ function agentEnvironment(entry: Entry) {
     ...env,
     AGENT_AUTOLOOP_HOME: HOME,
     AGENT_AUTOLOOP_RUN: String(entry.run),
-    AGENT_AUTOLOOP_CONTEXT: path.join(entry.dir, "context.json"),
+    AGENT_AUTOLOOP_CONTEXT: path.join(entry.folder ?? entry.dir, "context.json"),
   };
 }
 
 const files = (entry: Entry) => ({
-  out: path.join(entry.dir, `stdout-${entry.turn}.log`),
-  err: path.join(entry.dir, `stderr-${entry.turn}.log`),
+  out: path.join(entry.folder ?? entry.dir, `stdout-${entry.turn}.log`),
+  err: path.join(entry.folder ?? entry.dir, `stderr-${entry.turn}.log`),
   exit: path.join(entry.dir, `exit-${entry.turn}`),
 });
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
@@ -200,10 +201,12 @@ export function createWorker({
       effort: agent.effort,
       access: agent.access as Turn["access"],
       command: agent.command,
-      contextFile: path.join(entry.dir, "context.json"),
-      folder: entry.dir,
+      contextFile: path.join(entry.folder ?? entry.dir, "context.json"),
+      folder: entry.folder ?? entry.dir,
     };
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
+    const env = agentEnvironment(entry);
+    adapter.prepare?.(turn, env);
     const argv = adapter.command(turn);
     const { out, err, exit } = files(entry);
     // Output and the exit code go through the shell, so they land in their files even if this program has gone by then.
@@ -223,10 +226,10 @@ export function createWorker({
     const login = [process.env.SHELL ?? "/bin/sh", "-lc", 'exec "$0" "$@"'];
     const child =
       process.platform === "win32"
-        ? launchWindows(entry.windowsJob!, argv, cwd, agentEnvironment(entry), { out, err, exit }, log)
+        ? launchWindows(entry.windowsJob!, argv, cwd, env, { out, err, exit }, log)
         : spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login, ...argv], {
             cwd,
-            env: agentEnvironment(entry),
+            env,
             detached: true,
             stdio: "ignore",
           });
@@ -251,6 +254,7 @@ export function createWorker({
       attempt: job.attempt,
       job,
       dir,
+      folder: process.platform === "win32" ? path.join(dir, "agent") : undefined,
       prompt: "",
       turn: 0,
       session: job.session ?? randomUUID(),
@@ -261,9 +265,10 @@ export function createWorker({
     // Kept before anything slow: a worker stopped from here on still has the job.
     save(entry);
     try {
-      writePrivateFile(path.join(dir, "context.json"), JSON.stringify(job.context, null, 2));
+      const contextFile = path.join(entry.folder ?? dir, "context.json");
+      writePrivateFile(contextFile, JSON.stringify(job.context, null, 2));
       const adapter = await adapterFor(job.agent.use);
-      entry.prompt = promptFor(job, path.join(dir, "context.json"));
+      entry.prompt = promptFor(job, contextFile);
       save(entry);
       launch(entry, adapter, entry.prompt);
     } catch (error) {
@@ -353,9 +358,10 @@ export function createWorker({
     }
     if (entry.turn === 0) {
       // The worker stopped while starting it, before anything was launched.
-      if (!entry.prompt) entry.prompt = promptFor(entry.job, path.join(entry.dir, "context.json"));
+      const contextFile = path.join(entry.folder ?? entry.dir, "context.json");
+      if (!entry.prompt) entry.prompt = promptFor(entry.job, contextFile);
       try {
-        writePrivateFile(path.join(entry.dir, "context.json"), JSON.stringify(entry.job.context, null, 2));
+        writePrivateFile(contextFile, JSON.stringify(entry.job.context, null, 2));
         return launch(entry, adapter, entry.prompt);
       } catch (error) {
         return endWith(entry, { outcome: "failed", error: String((error as Error).message ?? error).slice(0, 500) });

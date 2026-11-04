@@ -131,6 +131,8 @@ if (process.argv.includes("--server")) {
     const measured = {
       kernelLines,
       runtimeDependencies: Object.keys(manifest.dependencies ?? {}).length,
+      platform: process.platform,
+      budgetPolicy: process.platform === "win32" ? "report-only" : "enforced",
       machine: cpus()[0].model,
       node: process.version,
       coldMs,

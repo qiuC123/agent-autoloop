@@ -36,7 +36,7 @@ irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 
 
 Windows uses a scheduled task triggered when the current user signs in, without administrator privileges. Logs go to `~/.agent-autoloop/logs/up.log`. Installation preserves the terminal PATH and agent configuration directories, using the user's existing login; run `agent-autoloop service install` again after changing them. With `--no-service`, run `agent-autoloop up` in a terminal. `agent-autoloop service status` checks the background service; `service stop` stops the engine while preserving startup at the next login, and `service remove` also removes the scheduled task. `agent-autoloop stop <round>` stops a round's entire agent process tree. Shell examples require their corresponding shell; native Windows command agents use explicit `node.exe` / `.exe` commands and arguments.
 
-Windows data files grant access only to the current user. An agent sandbox running under a separate account (such as Codex Windows `elevated`) may be unable to read the turn context. The engine does not reconfigure the sandbox or switch to `full`; verify context access in the agent environment. Only the owner can explicitly choose `full` in a trusted rule.
+On Windows, the Codex plugin probes the actual sandbox user SID with the current `codex sandbox` configuration. Only the turn's `agent/` data directory is shared: read access for `read`, read/write for the default `edit`. Hub databases, keys, configuration and worker control records remain owner-only. No user group is granted access, and the plugin never switches to `full`.
 
 Then run a real loop with your own agent — ask, exit while it waits, make the call, resume:
 
@@ -205,7 +205,9 @@ Run these from `~/.agent-autoloop/app`:
 
 ### Benchmarks
 
-Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable. The pass marks in `npm run benchmark` are set for this machine, so another machine may report a miss.
+Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable. The performance limits in `npm run benchmark` remain enforced on POSIX platforms, so another machine may report a miss. Windows keeps the same measurement method, sampling, event counts, and connection creation, reporting all measured values without applying the M5 performance limits. Output includes `platform`, CPU model `machine`, and `budgetPolicy: "report-only"` (`"enforced"` on POSIX).
+
+Windows must still establish 1,000 real, concurrently waiting long polls and receive 1,000 successful responses. Simulation, crash, mutation, and other correctness checks remain mandatory. Cold start, idle and loaded RSS, durable throughput, dispatch p99, and simulation duration and throughput are all still reported.
 
 | Metric | Measured |
 |---|---:|

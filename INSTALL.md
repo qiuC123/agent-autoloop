@@ -43,7 +43,7 @@ $env:AGENT_AUTOLOOP_REPO = 'C:/code/agent-autoloop'
 
 程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`（Windows 的 `~` 是 `USERPROFILE`）。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；Windows 生成 `.cmd` 入口，不修改系统 PATH，没有位置时使用安装器打印的完整路径。
 
-安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
+安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 
@@ -120,4 +120,4 @@ agent-autoloop uninstall
 
 开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
 
-Windows 数据文件只授权当前用户。Codex `elevated` 等独立账号沙箱可能读不到 `context.json`；请先在 Agent 自己的环境里核实，安装器不会更改沙箱或自动改用 `full`。
+Windows Codex 插件按当前权限模式和登录环境运行 `codex sandbox`，取得实际用户 SID 后，只授权本轮的 `agent/` 资料目录：`read` 只读，默认 `edit` 可读写。父目录里的 worker 轮次凭据、退出标记及启动参数不共享；`hub.db`、`master.key`、`secrets.env`、`config.json` 仍只由当前用户读取。不会修改沙箱配置或自动改用 `full`。

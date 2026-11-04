@@ -1,9 +1,10 @@
 // Failure modes: Windows shell parsing changes arguments; restart loses a live turn; cancellation or an externally
 // killed wrapper leaves descendants running; recovery releases a starting turn before its guardian starts business.
+// Adapter preparation must see the actual cleaned environment and share only data, never worker control files.
 // All processes are local Node fixtures, with no real agent or channel.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setup } from "./helpers.ts";
@@ -90,6 +91,78 @@ test("Windows inherits terminal login environment and preserves every literal ar
   assert.equal(result.user, process.env.USERPROFILE);
   assert.equal(result.secret, undefined);
 });
+
+test(
+  "Windows prepares only per-run data with the same cleaned environment that the agent receives",
+  windows,
+  async () => {
+    process.env.AGENT_AUTOLOOP_SECRET_TEST = "not-for-preparation";
+    const plugin = join(home, "plugins", "prepared");
+    mkdirSync(plugin, { recursive: true });
+    const keys = [
+      "PATH",
+      "USERPROFILE",
+      "CODEX_HOME",
+      "AGENT_AUTOLOOP_CONTEXT",
+      "AGENT_AUTOLOOP_RUN",
+      "AGENT_AUTOLOOP_SECRET_TEST",
+    ];
+    writeFileSync(
+      join(plugin, "agent.ts"),
+      `import { existsSync, writeFileSync } from 'node:fs'; import path from 'node:path';
+    export default {
+      prepare(turn, env) { writeFileSync(path.join(turn.folder, 'prepared.json'), JSON.stringify({ turn,
+        env: Object.fromEntries(${JSON.stringify(keys)}.map(key => [key, env[key]])) })); },
+      command(turn) { if (!existsSync(path.join(turn.folder, 'prepared.json'))) throw new Error('prepare was not called'); return turn.command; },
+      read(stdout, code, stderr) { return code === null ? {} : code === 0 ? { text: stdout } : { error: stderr }; }
+    };`,
+    );
+    const release = join(folder, "prepared-release");
+    const actual = join(folder, "prepared-environment.json");
+    const f = fixture(`const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(actual)}, JSON.stringify(
+    Object.fromEntries(${JSON.stringify(keys)}.map(key => [key, process.env[key]]))));
+    const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('准备通过'); } }, 20);`);
+    f.job.agent.use = "prepared";
+    const worker = f.worker();
+    try {
+      await worker.tick();
+      const entry = worker.entries()[0];
+      const prepared = join(entry.folder ?? entry.dir, "prepared.json");
+      assert.ok(existsSync(prepared), "prepare must run before command and agent launch");
+      await until(() => existsSync(actual));
+      const seen = JSON.parse(readFileSync(prepared, "utf8"));
+      assert.equal(entry.folder, join(entry.dir, "agent"));
+      assert.equal(seen.turn.folder, entry.folder);
+      assert.equal(seen.turn.contextFile, join(entry.folder!, "context.json"));
+      assert.ok(seen.turn.prompt.includes(seen.turn.contextFile));
+      assert.deepEqual(seen.env, JSON.parse(readFileSync(actual, "utf8")));
+      assert.equal(seen.env.AGENT_AUTOLOOP_SECRET_TEST, undefined);
+      assert.equal(seen.env.AGENT_AUTOLOOP_CONTEXT, seen.turn.contextFile);
+      assert.equal(existsSync(join(entry.dir, "entry.json")), true);
+      assert.equal(existsSync(join(entry.dir, "exit-1.launch")), true);
+      assert.equal(existsSync(join(entry.dir, "exit-1.ready")), true);
+      const data = readdirSync(entry.folder!);
+      assert.ok(data.includes("stdout-1.log") && data.includes("stderr-1.log"));
+      assert.equal(
+        data.some((name) => name === "entry.json" || name.startsWith("exit-")),
+        false,
+      );
+      for (const file of data) assert.ok(!readFileSync(join(entry.folder!, file), "utf8").includes(entry.token));
+      writeFileSync(release, "finish");
+      await until(
+        () => f.results.length === 1,
+        () => worker.tick().then(() => {}),
+      );
+      assert.equal(f.results[0].summary, "准备通过");
+    } finally {
+      writeFileSync(release, "finish");
+      await until(
+        () => worker.entries().length === 0,
+        () => worker.tick().then(() => {}),
+      );
+    }
+  },
+);
 
 test("Windows reclaims a live turn after worker restart and recovers its exit", windows, async () => {
   const ready = join(folder, "reclaimed");

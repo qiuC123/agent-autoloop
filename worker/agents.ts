@@ -25,6 +25,8 @@ export type Turn = {
 };
 export type Reading = { text?: string; session?: string; usage?: Usage; error?: string; finished?: boolean };
 export type Adapter = {
+  /** Prepare this turn's files before command construction, using the environment passed to the agent. */
+  prepare?(turn: Turn, env: NodeJS.ProcessEnv): void;
   /** Its command line for this turn. */
   command(turn: Turn): string[];
   /** What its output says so far. `code` is null while it's still running or when it died without saying. */

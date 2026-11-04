@@ -118,3 +118,5 @@ node --disable-warning=ExperimentalWarning --test tests/conformance.test.ts
 检查其他中台实现时，用 `agent-autoloop conformance <测试地址> --config <测试凭据文件>`，文件格式见[协议](protocol.md#一致性和复现)。它会写事件和卡片，只对专用测试中台运行。
 
 插件本身的完整接入测试见 [tests/example-plugins.test.ts](../tests/example-plugins.test.ts)。用其他语言写独立进程也可以，参考 [curl/jq 通道](../examples/channel.sh)和[接单程序](../examples/worker.sh)。
+
+Windows 等需要为沙箱准备资料访问的 Agent 插件可提供同步可选的 `prepare(turn, env)`：接单程序在 `command(turn)` 前调用，`env` 是实际启动进程使用的清洗后环境。Windows 的 `turn.folder` 是本轮 `agent/` 资料子目录，包含 context 和输出；父目录里的轮次凭据及退出标记不能授权给 Agent。旧插件无需实现此方法，POSIX 资料路径保持不变。

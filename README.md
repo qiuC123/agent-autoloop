@@ -34,7 +34,7 @@ Windows（PowerShell 5.1 或更新）：
 irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
 ```
 
-Windows 数据目录只授权当前用户。使用独立账号的 Agent 沙箱（如 Codex 的 Windows `elevated` 模式）可能读不到本轮资料；引擎不会修改沙箱或自动放宽为 `full`。先核实 Agent 对资料文件的读取，`full` 只能由本人在可信规则中明确选择。
+Windows 的 Codex 插件会用当前配置的 `codex sandbox` 探测工具实际运行的用户 SID，只给本轮 `agent/` 资料目录增加权限：`read` 只读，默认 `edit` 可读写。hub 数据库、密钥、配置及 worker 控制记录仍只属于当前用户；不放开用户组，也不自动改用 `full`。
 
 Windows 用当前用户登录时启动的计划任务常驻，不需要管理员权限；日志在 `~/.agent-autoloop/logs/up.log`。安装时保留终端的 PATH 和 Agent 配置目录，沿用本人登录；修改它们后重新运行 `agent-autoloop service install`。用 `--no-service` 安装时，在终端运行 `agent-autoloop up`。`agent-autoloop service status` 查看常驻状态，`service stop` 停止中台并保留下次登录启动，`service remove` 停止并移除计划任务。停止单轮用 `agent-autoloop stop <轮次>`，它会停掉整棵 Agent 进程树。Shell 示例需在对应的 shell 中运行，Windows 原生命令脚本用明确的 `node.exe` / `.exe` 和参数。
 
@@ -203,7 +203,9 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ### 实测性能
 
-Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应答。`npm run benchmark` 的达标线按这台机器定，换台机器可能报未达标。
+Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应答。`npm run benchmark` 的性能达标线按这台机器定，POSIX 平台继续严格检查，换台机器可能报未达标。Windows 保持同一测法、采样、事件数和连接创建方式，完整报告实测数字，不套用 M5 的性能达标线；输出包含 `platform`、CPU 型号 `machine` 和 `budgetPolicy: "report-only"`（POSIX 为 `"enforced"`）。
+
+Windows 仍必须完成 1000 个真实、同时等待的长轮询并收到 1000 个成功响应；模拟、强杀、变异和其他正确性检查不放宽。冷启动、空闲及千连接负载 RSS、逐笔持久化吞吐、派活 p99、模拟耗时与吞吐都继续输出。
 
 | 指标 | 实测 |
 |---|---:|

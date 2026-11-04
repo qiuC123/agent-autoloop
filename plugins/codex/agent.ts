@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { command } from "../../host/command.ts";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
+import { prepareWindows } from "./windows.ts";
 
 const SANDBOX = { read: "read-only", edit: "workspace-write", full: "danger-full-access" };
 const IN_THE_APP = [
@@ -29,6 +30,7 @@ const IN_THE_APP = [
 export const codexProgram = () => findProgram("codex", () => IN_THE_APP);
 
 export default {
+  prepare: (turn, env) => prepareWindows(codexProgram(), SANDBOX[turn.access], turn, env),
   command: (turn) => [
     ...command(codexProgram()),
     "exec",
@@ -46,6 +48,7 @@ export default {
     "本轮通过后台 codex exec 运行，不要假定桌面应用的浏览器连接已带到本轮。" +
       "网页操作使用本轮实际可用的浏览器工具，或使用规则或 Skill 中已明确配置的浏览器入口。" +
       "沿用该入口的会话，只交网页步骤，业务处理和中台回执仍由本轮负责；没有可用入口或需要本人恢复连接时，按待你处理的约定交回。\n\n" +
+      (process.platform === "win32" ? "本轮资料文件是 UTF-8；用 PowerShell 读取时显式加 -Encoding UTF8。\n\n" : "") +
       turn.prompt,
   ],
   read(stdout, code, stderr) {

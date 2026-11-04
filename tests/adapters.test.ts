@@ -4,18 +4,19 @@
 // or a background Codex run assumes it inherited an application's browser connection.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { setup } from "./helpers.ts";
 
-process.env.PATH = `/nonexistent:${process.env.PATH}`;
+process.env.PATH = `/nonexistent${delimiter}${process.env.PATH}`;
 const { findProgram } = await import("../worker/agents.ts");
 // Command construction must also run on CI machines without Codex installed.
 const shell = process.env.SHELL;
-const lookup = join(setup("adapters"), "lookup.sh");
+const fixtures = setup("adapters");
+const lookup = join(fixtures, "lookup.sh");
 writeFileSync(lookup, '#!/bin/sh\nprintf "%s\\n" /test/codex\n', { mode: 0o755 });
 process.env.SHELL = lookup;
-findProgram("codex");
+findProgram("codex", () => [lookup]);
 if (shell === undefined) delete process.env.SHELL;
 else process.env.SHELL = shell;
 type Adapter = import("../worker/agents.ts").Adapter;

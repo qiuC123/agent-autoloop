@@ -99,7 +99,19 @@ if (process.argv.includes("--server")) {
     const polls = [];
     for (let i = 0; i < 1000; i++) {
       polls.push(observe(request(`/v1/work?wait=5&capacity=0&claim=p${i}`, "worker")));
-      if (i % 32 === 31) await new Promise((resolve) => setTimeout(resolve, 10));
+      if (i % 32 === 31) {
+        if (process.platform === "win32") {
+          // Let Windows accept this batch before filling its pending connection queue again.
+          const deadline = performance.now() + 4000;
+          for (;;) {
+            child.send("sample");
+            const [sample] = await once(child, "message");
+            if (sample.active === i + 1) break;
+            assert.ok(performance.now() < deadline, "等待中的连接没有达到本批数量");
+            await new Promise((resolve) => setTimeout(resolve, 1));
+          }
+        } else await new Promise((resolve) => setTimeout(resolve, 10));
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
     child.send("sample");
@@ -119,6 +131,8 @@ if (process.argv.includes("--server")) {
     const measured = {
       kernelLines,
       runtimeDependencies: Object.keys(manifest.dependencies ?? {}).length,
+      platform: process.platform,
+      budgetPolicy: process.platform === "win32" ? "report-only" : "enforced",
       machine: cpus()[0].model,
       node: process.version,
       coldMs,

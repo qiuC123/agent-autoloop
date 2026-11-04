@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { command } from "../../host/command.ts";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
 
 const PERMISSIONS = { read: "plan", edit: "acceptEdits", full: "bypassPermissions" };
@@ -20,7 +21,7 @@ function inTheApp() {
 
 export default {
   command: (turn) => [
-    findProgram("claude", inTheApp),
+    ...command(findProgram("claude", inTheApp)),
     "-p",
     turn.prompt,
     ...(turn.resume ? ["--resume", turn.resume] : ["--session-id", turn.session]),
@@ -64,8 +65,8 @@ export default {
   link: (session) => `claude://resume?session=${session}`,
   check() {
     try {
-      const program = findProgram("claude", inTheApp);
-      const status = JSON.parse(execFileSync(program, ["auth", "status"], { encoding: "utf8", timeout: 20_000 }));
+      const [program, ...args] = command(findProgram("claude", inTheApp), ["auth", "status"]);
+      const status = JSON.parse(execFileSync(program, args, { encoding: "utf8", timeout: 20_000 }));
       return status.loggedIn ? null : "Claude Code 没有登录：运行 claude auth login";
     } catch (error) {
       return `Claude Code 用不了：${(error as Error).message.split("\n")[0]}`;

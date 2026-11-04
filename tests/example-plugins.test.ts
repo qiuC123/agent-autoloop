@@ -289,14 +289,22 @@ async function runBlock(heading: string, oldPort: number) {
   return { code, out };
 }
 
-test("the tutorial's first block runs all three examples as written", async () => {
-  const { code, out } = await runBlock("先跑起来", 3399);
-  assert.equal(code, 0, out);
-  assert.match(out, /agent-autoloop add from a git repository/);
-});
+test(
+  "the tutorial's first block runs all three examples as written",
+  { skip: process.platform === "win32" && "POSIX shell tutorial; native plugin loop is tested above" },
+  async () => {
+    const { code, out } = await runBlock("先跑起来", 3399);
+    assert.equal(code, 0, out);
+    assert.match(out, /agent-autoloop add from a git repository/);
+  },
+);
 
-test("the tutorial's conformance block passes as written", async () => {
-  const { code, out } = await runBlock("一致性测试", 3398);
-  assert.equal(code, 0, out);
-  assert.match(out, /pass [1-9]/);
-});
+test(
+  "the tutorial's conformance block passes as written",
+  { skip: process.platform === "win32" && "POSIX shell tutorial; native conformance is tested separately" },
+  async () => {
+    const { code, out } = await runBlock("一致性测试", 3398);
+    assert.equal(code, 0, out);
+    assert.match(out, /pass [1-9]/);
+  },
+);

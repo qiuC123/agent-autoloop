@@ -14,17 +14,29 @@ Most of us use command-line agents like Claude Code or Codex by babysitting a te
 
 **Agent Autoloop** turns your command-line agents into a background loop. At the center is a deterministic **kernel** with zero runtime dependencies. Around it, event sources, agents, notification channels, and even CI/CD delivery pipelines are all swappable **plugins**.
 
-- **One machine, one install command.** Runs on your Mac or Linux machine. No cloud server or inbound ports required.
+- **One machine, one install command.** Runs on macOS, Linux, or Windows. No cloud server or inbound ports required.
 - **Connect a new agent in one line.** No SDK, no agent source code to fork. Any CLI tool that takes a prompt and prints a final reply can plug in.
 - **No web dashboard.** Cards reach you on Feishu, DingTalk, WeCom, Slack, Discord, or desktop notifications when you are needed. Everything else is one command away.
 
 ## Get started
 
-Works on macOS and Linux. You need Node 24, Git, curl, and at least one command-line agent already signed in; no GitHub account required. You can also hand the [installation guide](INSTALL.md) to your agent and let it install everything for you.
+Works on macOS, Linux, and Windows 10/11. You need Node 24, Git, and at least one command-line agent already signed in; no GitHub account required. You can also hand the [installation guide](INSTALL.md) to your agent and let it install everything for you.
+
+macOS / Linux (also requires curl):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+Windows (PowerShell 5.1 or later):
+
+```powershell
+irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
+```
+
+Windows uses a scheduled task triggered when the current user signs in, without administrator privileges. Logs go to `~/.agent-autoloop/logs/up.log`. Installation preserves the terminal PATH and agent configuration directories, using the user's existing login; run `agent-autoloop service install` again after changing them. With `--no-service`, run `agent-autoloop up` in a terminal. `agent-autoloop service status` checks the background service; `service stop` stops the engine while preserving startup at the next login, and `service remove` also removes the scheduled task. `agent-autoloop stop <round>` stops a round's entire agent process tree. Shell examples require their corresponding shell; native Windows command agents use explicit `node.exe` / `.exe` commands and arguments.
+
+On Windows, the Codex plugin probes the actual sandbox user SID with the current `codex sandbox` configuration. Only the turn's `agent/` data directory is shared: read access for `read`, read/write for the default `edit`. Hub databases, keys, configuration and worker control records remain owner-only. No user group is granted access, and the plugin never switches to `full`.
 
 Then run a real loop with your own agent — ask, exit while it waits, make the call, resume:
 
@@ -193,7 +205,9 @@ Run these from `~/.agent-autoloop/app`:
 
 ### Benchmarks
 
-Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable. The pass marks in `npm run benchmark` are set for this machine, so another machine may report a miss.
+Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable. The performance limits in `npm run benchmark` remain enforced on POSIX platforms, so another machine may report a miss. Windows keeps the same measurement method, sampling, event counts, and connection creation, reporting all measured values without applying the M5 performance limits. Output includes `platform`, CPU model `machine`, and `budgetPolicy: "report-only"` (`"enforced"` on POSIX).
+
+Windows must still establish 1,000 real, concurrently waiting long polls and receive 1,000 successful responses. Simulation, crash, mutation, and other correctness checks remain mandatory. Cold start, idle and loaded RSS, durable throughput, dispatch p99, and simulation duration and throughput are all still reported.
 
 | Metric | Measured |
 |---|---:|
@@ -240,8 +254,8 @@ For automated workloads, providers generally recommend using API keys rather tha
 | `skills/agent-autoloop/` | The hub's configuration and operation manual, also made available to agents during installation |
 | `docs/` | Protocol, plugin guide, and Chinese / English architecture diagrams |
 | `tests/`, `sim/` | Everyday behavior tests, simulation, enumeration, crash tests, and mutation checks |
-| `scripts/`, `.github/workflows/` | Performance and real-agent checks, installation smoke scripts, and Linux / macOS CI |
-| Root documents and `install.sh` | Chinese / English READMEs, installation, security, development guidelines, license, and installer |
+| `scripts/`, `.github/workflows/` | Performance and real-agent checks, installation smoke scripts, and Linux / macOS / Windows CI |
+| Root documents, `install.sh`, and `install.ps1` | Chinese / English READMEs, installation, security, development guidelines, license, and installers |
 
 Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feature into `host/`, `worker/`, or `plugins/`. Read the [protocol](docs/protocol.md) for kernel design. Similarly named files serve different layers: `host/http.ts` adapts Node requests while `kernel/http.ts` defines endpoint behavior; `protocol/rules.ts` validates input while `kernel/rules.ts` defines rule types and matching.
 

@@ -30,11 +30,15 @@ after(() => {
 const url = `http://127.0.0.1:${(server.address() as any).port}`;
 const shell = (file: string, key: string, extra: Record<string, string> = {}) =>
   new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-    const child = spawn("sh", [`examples/${file}.sh`], {
-      cwd: new URL("..", import.meta.url),
-      env: { ...process.env, AGENT_AUTOLOOP_URL: url, AGENT_AUTOLOOP_KEY: key, AGENT_AUTOLOOP_ONCE: "1", ...extra },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      process.platform === "win32" ? process.execPath : "sh",
+      [`examples/${file}.${process.platform === "win32" ? "ts" : "sh"}`],
+      {
+        cwd: new URL("..", import.meta.url),
+        env: { ...process.env, AGENT_AUTOLOOP_URL: url, AGENT_AUTOLOOP_KEY: key, AGENT_AUTOLOOP_ONCE: "1", ...extra },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let out = "";
     let err = "";
     child.stdout.on("data", (b) => (out += b));

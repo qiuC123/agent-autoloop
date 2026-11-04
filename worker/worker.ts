@@ -7,7 +7,6 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -16,16 +15,17 @@ import {
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
+import { privateDirectory, writePrivateFile } from "../host/private.ts";
 import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
+import { launchWindows, windowsAlive, windowsStop } from "./windows.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
 const TIMEOUT_MINUTES = 180;
@@ -49,6 +49,7 @@ type Entry = {
   attempt: number;
   job: Job;
   dir: string;
+  folder?: string;
   prompt: string;
   turn: number;
   session: string;
@@ -57,6 +58,7 @@ type Entry = {
   triedFresh: boolean;
   usage?: Usage;
   pid?: number;
+  windowsJob?: string;
   launchedAt?: number;
   finishedAt?: number;
   told?: string;
@@ -78,7 +80,7 @@ export type WorkerOptions = {
 
 function save(entry: Entry) {
   const file = path.join(entry.dir, "entry.json");
-  writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
+  writePrivateFile(`${file}.tmp`, JSON.stringify(entry));
   renameSync(`${file}.tmp`, file);
 }
 
@@ -93,18 +95,20 @@ function agentEnvironment(entry: Entry) {
     ...env,
     AGENT_AUTOLOOP_HOME: HOME,
     AGENT_AUTOLOOP_RUN: String(entry.run),
-    AGENT_AUTOLOOP_CONTEXT: path.join(entry.dir, "context.json"),
+    AGENT_AUTOLOOP_CONTEXT: path.join(entry.folder ?? entry.dir, "context.json"),
   };
 }
 
 const files = (entry: Entry) => ({
-  out: path.join(entry.dir, `stdout-${entry.turn}.log`),
-  err: path.join(entry.dir, `stderr-${entry.turn}.log`),
+  out: path.join(entry.folder ?? entry.dir, `stdout-${entry.turn}.log`),
+  err: path.join(entry.folder ?? entry.dir, `stderr-${entry.turn}.log`),
   exit: path.join(entry.dir, `exit-${entry.turn}`),
 });
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
 
 function alive(entry: Entry) {
+  if (process.platform === "win32")
+    return !!entry.windowsJob && windowsAlive(entry.windowsJob, `${files(entry).exit}.launch`);
   if (!entry.pid) return false;
   try {
     const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
@@ -115,12 +119,17 @@ function alive(entry: Entry) {
 }
 
 function signal(entry: Entry, name: NodeJS.Signals) {
+  if (process.platform === "win32") {
+    if (entry.windowsJob) windowsStop(entry.windowsJob, `${files(entry).exit}.launch`);
+    return;
+  }
   try {
     if (entry.pid) process.kill(-entry.pid, name);
   } catch {}
 }
 
 function groupAlive(entry: Entry) {
+  if (process.platform === "win32") return alive(entry);
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
     .trim()
@@ -160,7 +169,7 @@ export function createWorker({
   let unreachableSince: number | null = null;
   let told = false;
   let tries = 0;
-  mkdirSync(RUNS, { recursive: true, mode: 0o700 });
+  privateDirectory(RUNS);
 
   const entries = () =>
     readdirSync(RUNS).flatMap((id) => {
@@ -179,9 +188,10 @@ export function createWorker({
     delete entry.pid;
     delete entry.stopping;
     delete entry.why;
+    if (process.platform === "win32") entry.windowsJob = `Local\\agent-autoloop-${randomUUID()}`;
     save(entry);
     const { rule, agent } = entry.job;
-    const cwd = rule.cwd.replace(/^~(?=\/)/, homedir());
+    const cwd = rule.cwd.replace(process.platform === "win32" ? /^~(?=[/\\])/ : /^~(?=\/)/, homedir());
     const turn: Turn = {
       prompt,
       session: entry.session,
@@ -191,10 +201,12 @@ export function createWorker({
       effort: agent.effort,
       access: agent.access as Turn["access"],
       command: agent.command,
-      contextFile: path.join(entry.dir, "context.json"),
-      folder: entry.dir,
+      contextFile: path.join(entry.folder ?? entry.dir, "context.json"),
+      folder: entry.folder ?? entry.dir,
     };
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
+    const env = agentEnvironment(entry);
+    adapter.prepare?.(turn, env);
     const argv = adapter.command(turn);
     const { out, err, exit } = files(entry);
     // Output and the exit code go through the shell, so they land in their files even if this program has gone by then.
@@ -212,12 +224,15 @@ export function createWorker({
     ].join("\n");
     // The login shell gives it the PATH and sign-in its owner has in a terminal; launchd and systemd give neither.
     const login = [process.env.SHELL ?? "/bin/sh", "-lc", 'exec "$0" "$@"'];
-    const child = spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login, ...argv], {
-      cwd,
-      env: agentEnvironment(entry),
-      detached: true,
-      stdio: "ignore",
-    });
+    const child =
+      process.platform === "win32"
+        ? launchWindows(entry.windowsJob!, argv, cwd, env, { out, err, exit }, log)
+        : spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login, ...argv], {
+            cwd,
+            env,
+            detached: true,
+            stdio: "ignore",
+          });
     child.on("error", (error) => log(`run ${entry.run}: ${error}`));
     child.unref();
     entry.pid = child.pid;
@@ -232,13 +247,14 @@ export function createWorker({
 
   async function start(job: Job) {
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privateDirectory(dir);
     const entry: Entry = {
       run: job.run,
       token: job.token,
       attempt: job.attempt,
       job,
       dir,
+      folder: process.platform === "win32" ? path.join(dir, "agent") : undefined,
       prompt: "",
       turn: 0,
       session: job.session ?? randomUUID(),
@@ -249,9 +265,10 @@ export function createWorker({
     // Kept before anything slow: a worker stopped from here on still has the job.
     save(entry);
     try {
-      writeFileSync(path.join(dir, "context.json"), JSON.stringify(job.context, null, 2), { mode: 0o600 });
+      const contextFile = path.join(entry.folder ?? dir, "context.json");
+      writePrivateFile(contextFile, JSON.stringify(job.context, null, 2));
       const adapter = await adapterFor(job.agent.use);
-      entry.prompt = promptFor(job, path.join(dir, "context.json"));
+      entry.prompt = promptFor(job, contextFile);
       save(entry);
       launch(entry, adapter, entry.prompt);
     } catch (error) {
@@ -341,11 +358,10 @@ export function createWorker({
     }
     if (entry.turn === 0) {
       // The worker stopped while starting it, before anything was launched.
-      if (!entry.prompt) entry.prompt = promptFor(entry.job, path.join(entry.dir, "context.json"));
+      const contextFile = path.join(entry.folder ?? entry.dir, "context.json");
+      if (!entry.prompt) entry.prompt = promptFor(entry.job, contextFile);
       try {
-        writeFileSync(path.join(entry.dir, "context.json"), JSON.stringify(entry.job.context, null, 2), {
-          mode: 0o600,
-        });
+        writePrivateFile(contextFile, JSON.stringify(entry.job.context, null, 2));
         return launch(entry, adapter, entry.prompt);
       } catch (error) {
         return endWith(entry, { outcome: "failed", error: String((error as Error).message ?? error).slice(0, 500) });
@@ -354,7 +370,7 @@ export function createWorker({
     const { exit } = files(entry);
     if (entry.stopping !== undefined) {
       if (groupAlive(entry)) {
-        if (now() - entry.stopping > STOP_GRACE) signal(entry, "SIGKILL");
+        if (process.platform === "win32" || now() - entry.stopping > STOP_GRACE) signal(entry, "SIGKILL");
         return;
       }
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);

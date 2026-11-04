@@ -1,16 +1,22 @@
 // Each test file runs in its own process with its own home and the fixture rules; modules are imported after this sets
 // the environment they read.
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { after } from "node:test";
 
 export function setup(name: string, rules = "rules.fixture.json") {
   const directory = mkdtempSync(join(tmpdir(), `agent-autoloop-${name}-`));
   process.env.AGENT_AUTOLOOP_HOME = directory;
-  process.env.AGENT_AUTOLOOP_RULES = rules.startsWith("/") ? rules : join(import.meta.dirname, rules);
+  process.env.AGENT_AUTOLOOP_RULES = isAbsolute(rules) ? rules : join(import.meta.dirname, rules);
   process.env.AGENT_AUTOLOOP_PUBLIC_URL = "https://hub.test";
-  after(() => rmSync(directory, { recursive: true, force: true }));
+  after(async () => {
+    if (existsSync(join(directory, "hub.db"))) {
+      const { db } = await import("../host/runtime.ts");
+      if (db.isOpen) db.close();
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
   return directory;
 }
 

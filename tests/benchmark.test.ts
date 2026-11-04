@@ -1,5 +1,6 @@
 // Failure modes: completed or keep-alive requests masquerade as concurrent long polls; a failed response counts as success;
 // cron work is claimed before the measured event, leaving the readiness wait stuck and invalidating dispatch timing.
+// Machine-specific speed limits reject valid Windows runs, or become disabled on the original POSIX platforms.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -32,15 +33,29 @@ test("budget checks fail on startup, idle memory, durable throughput, latency re
     eventToClaimP99Ms: 1.8,
     simulationStepsPerSecond: 34000,
   };
-  checkBudget(measured);
-  checkBudget({ ...measured, simulationStepsPerSecond: 100 });
+  checkBudget(measured, "linux");
+  checkBudget({ ...measured, simulationStepsPerSecond: 100 }, "linux");
   for (const [key, value] of Object.entries({
     coldMs: 151,
     idleRssMB: 61,
     durableEventsPerSecond: 1999,
     eventToClaimP99Ms: 11,
   }))
-    assert.throws(() => checkBudget({ ...measured, [key]: value }));
+    for (const platform of ["linux", "darwin"] as const)
+      assert.throws(() => checkBudget({ ...measured, [key]: value }, platform));
+});
+
+test("Windows reports measurements without applying the M5 performance budget; concurrency correctness stays mandatory", () => {
+  const measured = {
+    coldMs: 2000,
+    idleRssMB: 120,
+    durableEventsPerSecond: 200,
+    eventToClaimP99Ms: 100,
+    simulationStepsPerSecond: 100,
+  };
+  assert.doesNotThrow(() => checkBudget(measured, "win32"));
+  assert.throws(() => checkPolls({ active: 999, peak: 1000 }, 1000), /1000/);
+  assert.throws(() => checkPolls({ active: 1000, peak: 1000 }, 999), /1000/);
 });
 test("dispatch latency includes waking an already waiting worker", async () => {
   let waiting = false;

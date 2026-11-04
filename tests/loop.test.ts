@@ -21,7 +21,8 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { assertPrivate } from "./private.ts";
 import { after, test } from "node:test";
 
 const home = mkdtempSync(join(tmpdir(), "agent-autoloop-loop-"));
@@ -30,17 +31,25 @@ const bin = join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 const notifiers = join(home, "notifiers");
 const notified = join(home, "notified.txt");
 mkdirSync(notifiers);
-writeFileSync(join(notifiers, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-for (const name of ["osascript", "notify-send"]) {
-  const recordTitle = `while [ "$1" != "--" ]; do shift; done\nprintf '%s\\n' "$3" >> "${notified}"\n`;
-  writeFileSync(join(notifiers, name), `#!/bin/sh\n${recordTitle}`);
-  chmodSync(join(notifiers, name), 0o755);
+writeFileSync(join(notifiers, "launchctl"), "#!/usr/bin/env node\n", { mode: 0o755 });
+for (const name of ["osascript", "notify-send", "powershell.exe"]) {
+  writeFileSync(
+    join(notifiers, name),
+    `#!/usr/bin/env node
+const {appendFileSync}=require('node:fs');
+const args=process.argv.slice(2);
+const body=${process.platform === "win32"} ? Buffer.from(args.at(-1),'base64').toString('utf8') : args.at(-1);
+appendFileSync(${JSON.stringify(notified)},body+'\\n');
+`,
+    { mode: 0o755 },
+  );
 }
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   AGENT_AUTOLOOP_HOME: home,
   DISPLAY: ":99",
-  PATH: `${notifiers}:${process.env.PATH}`,
+  SESSIONNAME: "Console",
+  PATH: `${notifiers}${delimiter}${process.env.PATH}`,
 };
 delete env.AGENT_AUTOLOOP_RULES;
 delete env.AGENT_AUTOLOOP_PUBLIC_URL;
@@ -61,39 +70,29 @@ const freePort = () =>
   });
 
 const fence = "```";
-const script = join(home, "agent.sh");
+const script = join(home, "agent.mjs");
 writeFileSync(
   script,
-  `#!/bin/sh
-# Asks on its first go; with an answer in the context file, finishes. Asked to, it only says something.
-if grep -q 'card.answered' "$AGENT_AUTOLOOP_CONTEXT"; then
-  echo "你选了绿色，做完了"
-elif grep -q 'hello.notice' "$AGENT_AUTOLOOP_CONTEXT"; then
-  cat <<'END'
-说了一声
-
-${fence}agent-autoloop
-{"notice":[{"title":"留意一下","text":"磁盘快满了","key":"disk"}]}
-${fence}
-END
-else
-  pwd > "${home}/where.txt"
-  cat <<'END'
-问了一个问题
-
-${fence}agent-autoloop
-{"ask":[{"title":"试跑：选一个颜色","text":"选哪个都行","options":["蓝色","绿色"],"recommend":1,"key":"color"}]}
-${fence}
-END
-fi
+  `#!/usr/bin/env node
+import {readFileSync,writeFileSync} from 'node:fs';
+const context=readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8');
+if(context.includes('card.answered')) console.log('你选了绿色，做完了');
+else if(context.includes('hello.notice')) console.log('说了一声\\n\\n'+${JSON.stringify(fence)}+'agent-autoloop\\n'+JSON.stringify({notice:[{title:'留意一下',text:'磁盘快满了',key:'disk'}]})+'\\n'+${JSON.stringify(fence)});
+else {
+ writeFileSync(${JSON.stringify(join(home, "where.txt"))},process.cwd());
+ console.log('问了一个问题\\n\\n'+${JSON.stringify(fence)}+'agent-autoloop\\n'+JSON.stringify({ask:[{title:'试跑：选一个颜色',text:'选哪个都行',options:['蓝色','绿色'],recommend:1,key:'color'}]})+'\\n'+${JSON.stringify(fence)});
+}
 `,
+  { mode: 0o755 },
 );
-chmodSync(script, 0o755);
 
 let up: ReturnType<typeof spawn> | undefined;
 after(async () => {
-  up?.kill("SIGTERM");
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (up && up.exitCode === null && up.signalCode === null) {
+    const exited = new Promise((resolve) => up!.once("close", resolve));
+    up.kill("SIGTERM");
+    await exited;
+  }
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -101,7 +100,7 @@ test("one machine, one command: an event, a question, an answer, the work done",
   const port = await freePort();
   const done = cli("init", "--no-service", "--command", script, "--port", String(port));
   assert.equal(done.status, 0, done.stderr);
-  assert.equal(statSync(join(home, "config.json")).mode & 0o777, 0o600, "its keys are private");
+  assertPrivate(join(home, "config.json"));
   assert.equal(cli("init", "--no-service").status, 1, "a second init doesn't overwrite the first");
   assert.equal(cli("check").status, 0);
   // Point the starter rule at something this test owns.
@@ -203,7 +202,7 @@ test("the user's Agents are shown how to set it up, when this is the install in 
   mkdirSync(join(person, ".claude"));
   mkdirSync(join(person, ".codex", "skills", "agent-autoloop"), { recursive: true });
   writeFileSync(join(person, ".codex", "skills", "agent-autoloop", "SKILL.md"), "their own");
-  const usual: NodeJS.ProcessEnv = { ...env, HOME: person };
+  const usual: NodeJS.ProcessEnv = { ...env, HOME: person, USERPROFILE: person };
   delete usual.AGENT_AUTOLOOP_HOME;
   const done = spawnSync(
     process.execPath,

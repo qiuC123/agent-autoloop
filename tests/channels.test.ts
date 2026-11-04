@@ -6,7 +6,7 @@
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -109,19 +109,25 @@ test("feishu: sends once per card, updates in place, reports failure, and only r
   // A stand-in for lark-cli: records each call; `event consume` prints two clicks and waits to be stopped.
   writeFileSync(
     lark,
-    `#!/bin/sh
-echo "$*" >> "${log}"
-case "$*" in
-  *"event consume"*)
-    echo '{"action_value":"{\\"card\\":5,\\"choice\\":1}","operator_id":"ou_me","message_id":"om_5"}'
-    echo '{"action_value":"{\\"other\\":1}","operator_id":"ou_me","message_id":"om_5"}'
-    exec sleep 30 ;;
-  *fail-me*) exit 1 ;;
-  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_5"}}' ;;
-esac
+    `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');
+if (args[0] === 'event') {
+  console.log(JSON.stringify({action_value:JSON.stringify({card:5,choice:1}),operator_id:'ou_me',message_id:'om_5'}));
+  console.log(JSON.stringify({action_value:JSON.stringify({other:1}),operator_id:'ou_me',message_id:'om_5'}));
+  setInterval(() => {}, 1000);
+} else {
+  let input = '';
+  process.stdin.on('data', chunk => input += chunk);
+  process.stdin.on('end', () => {
+    if (input.includes('fail-me')) process.exit(1);
+    console.log(JSON.stringify({ok:true,data:{message_id:'om_5'}}));
+  });
+}
 `,
+    { mode: 0o755 },
   );
-  chmodSync(lark, 0o755);
   const stop = new AbortController();
   const cards: (Card | null)[] = [
     base,
@@ -149,14 +155,6 @@ esac
       return { changed: true };
     },
   };
-  // A card that can't be sent: lark-cli is told to fail by the words in it.
-  writeFileSync(
-    lark,
-    readFileSync(lark, "utf8").replace(
-      "*fail-me*) exit 1 ;;",
-      '*+messages-send*) body=$(cat); case "$body" in *fail-me*) exit 1 ;; esac; echo \'{"ok":true,"data":{"message_id":"om_5"}}\' ;;',
-    ),
-  );
   await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
   const lines = readFileSync(log, "utf8").trim().split("\n");
   const sends = lines.filter((l) => l.includes("+messages-send"));

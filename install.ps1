@@ -9,7 +9,7 @@ $git = Get-Command git.exe -ErrorAction SilentlyContinue
 if (-not $git) { throw '需要 Git for Windows。装好后重新打开终端再安装。' }
 $node = Get-Command node.exe -ErrorAction SilentlyContinue
 if (-not $node) { throw '需要 Node.js 24 或更新。请从 https://nodejs.org 安装后重新打开终端。' }
-& $node.Path -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'
+& $node.Path -e 'process.exit(parseInt(process.versions.node, 10) >= 24 ? 0 : 1)'
 if ($LASTEXITCODE -ne 0) { throw '需要 Node.js 24 或更新。请升级后重新打开终端。' }
 
 New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null

@@ -17,6 +17,19 @@ test("PowerShell installer is parseable without executing it", { skip: process.p
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("PowerShell 5.1 passes the Node version check to node intact", { skip: process.platform !== "win32" }, () => {
+  // Windows PowerShell 5.1 drops embedded double quotes from native-command arguments.
+  const check = readFileSync(installer, "utf8").match(/^& \$node\.Path -e .*$/m)?.[0];
+  assert.ok(check);
+  const script = `$node=Get-Command node.exe;${check};exit $LASTEXITCODE`;
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+    { encoding: "utf8", windowsHide: true },
+  );
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("PowerShell installer preserves data and delegates to the same init and service entry points", () => {
   const source = readFileSync(installer, "utf8");
   assert.match(source, /AGENT_AUTOLOOP_REPO/);

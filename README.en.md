@@ -178,7 +178,7 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 
 **Write your own.** Start from the runnable [agent](examples/plugins/hello-agent/agent.ts), [channel](examples/plugins/hello-channel/channel.ts), and [event](examples/plugins/hello-source/source.ts) templates and the [plugin guide](docs/plugins.md). For web tasks, read [browser access](docs/plugins.md#浏览器接入) first. The CLI and [MCP](skills/agent-autoloop/SKILL.md#mcp-与密钥撤销) can also inspect and answer cards.
 
-The new Feishu 2.0 text form and stale-answer feedback have been checked against official documentation and a fake CLI, but have not been verified with a live Feishu account.
+The Feishu channel requires **lark-cli 1.0.99 or newer** to read card JSON from standard input (`--content -`); version 1.0.96 does not support this argument. The new Feishu 2.0 text form and stale-answer feedback have been checked against official documentation and a fake CLI, but have not been verified with a live Feishu account.
 
 ## Four kernel mechanisms
 

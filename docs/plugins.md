@@ -82,6 +82,8 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 
 ### 飞书文字输入与过期反馈
 
+飞书通道需要 **lark-cli 1.0.99 或更新版本**。发送和更新卡片均通过标准输入传入 JSON；1.0.96 不接受发送时的 `--content -`，会报 `--content is not valid JSON: -`。1.0.99 已通过 `--dry-run` 验证该参数；下述 1.0.96 的回调文档核对不代表通道兼容该旧版本。
+
 内置飞书通道按 [2.0 表单](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/form-container)与[输入框](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/input)使用根级 `form`、具名 `input` 和 `form_action_type: "submit"` 按钮。选项回调为 `{card, choice, version}`，文字提交为 `{card, text: true, version}`；从 CLI 输出的 JSON 字符串 `form_value` 中读 `answer_text`，空白或非字符串不提交。只有 open ask 展示文字框。
 
 本机核对 `lark-cli 1.0.96` 的 `event consume card.action.trigger --help`、`event schema card.action.trigger` 和[官方回调文档](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-card-action-reply.md)：SDK 在 3 秒内自动回应 `{code:200}`，consume 只输出 NDJSON，没有回传 toast 的接口；延迟更新要求整张卡片。因此只在中台明确返回过期内容的 409 时，用 `im +messages-reply --message-id <原消息> --as bot --text "卡片已更新，请重看"` 提示。401、无效输入和其他错误仍报告日志，不向未经核验的消息回复。整个核对只读帮助与文档，测试用假 CLI；新表单 JSON 未经过真机验证。

@@ -176,7 +176,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 **写自己的插件。** 从 [Agent](examples/plugins/hello-agent/agent.ts)、[通道](examples/plugins/hello-channel/channel.ts)、[事件](examples/plugins/hello-source/source.ts) 三个可运行的最小模板开始，见[插件开发说明](docs/plugins.md)。要让 Agent 操作网页，先看[浏览器接入](docs/plugins.md#浏览器接入)。命令行和 [MCP](skills/agent-autoloop/SKILL.md#mcp-与密钥撤销) 也能查看和回答卡片。
 
-本次新增的飞书 2.0 文字表单和过期回答提示只经过官方文档核对与假 CLI 测试，尚未经过真实飞书账号验收。
+飞书通道需要 **lark-cli 1.0.99 或更新版本**，以支持从标准输入读取卡片 JSON（`--content -`）；1.0.96 不支持此参数。本次新增的飞书 2.0 文字表单和过期回答提示只经过官方文档核对与假 CLI 测试，尚未经过真实飞书账号验收。
 
 ## 内核的四个机制
 

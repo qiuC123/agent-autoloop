@@ -2,7 +2,7 @@
 // a full-access launch unexpectedly changes ACLs. A cwd alias may resolve to its long or canonical path in the child.
 // This uses a native fake CLI, never the installed Codex or a model.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -45,7 +45,10 @@ test(
         Buffer.from(got.args.at(-1), "base64").toString("utf16le"),
         "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
       );
-      assert.equal(realpathSync(got.cwd), realpathSync(cwd));
+      // realpathSync preserves some 8.3 aliases; directory IDs do not depend on spelling.
+      const actual = statSync(got.cwd, { bigint: true });
+      const expected = statSync(cwd, { bigint: true });
+      assert.deepEqual([actual.dev, actual.ino], [expected.dev, expected.ino]);
       assert.equal(got.home, "test-login-directory");
     }
   },

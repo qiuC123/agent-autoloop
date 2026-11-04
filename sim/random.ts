@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { rows } from "../kernel/evolve.ts";
-import { AuthError } from "../kernel/errors.ts";
+import { AuthError, Conflict } from "../kernel/errors.ts";
 import { credential } from "../kernel/credentials.ts";
 import { World, environment } from "./world.ts";
 
@@ -17,7 +17,16 @@ export function random(seed: number) {
 export function simulate(seed = 0x5eed, steps = 200000) {
   const rng = random(seed);
   const start = performance.now();
-  const faults: Record<string, number> = { lost: 0, duplicate: 0, restart: 0, offline: 0, channel: 0, clock: 0 };
+  const faults: Record<string, number> = {
+    lost: 0,
+    duplicate: 0,
+    restart: 0,
+    offline: 0,
+    channel: 0,
+    clock: 0,
+    update: 0,
+    staleAnswer: 0,
+  };
   let world = new World();
   let completed = 0;
   const receipts: { id: number; token: string; body: object; ack: object }[] = [];
@@ -30,7 +39,7 @@ export function simulate(seed = 0x5eed, steps = 200000) {
         receipts.length = 0;
       }
       world.advance(rng(30000));
-      const op = rng(12);
+      const op = rng(14);
       const live = rows(world.view, "runs").filter((r) => ["claimed", "unknown"].includes(r.state));
       if (op < 3) {
         const id = String(rng(16));
@@ -62,7 +71,7 @@ export function simulate(seed = 0x5eed, steps = 200000) {
           outcome: fail ? "failed" : "done",
           ...(!fail && rng(4) === 0
             ? {
-                ask: [{ title: "选择", text: "内容", options: ["甲", "乙"], key: `card-${r.id}` }],
+                ask: [{ title: "选择", text: "内容", options: ["甲", "乙"], key: "question" }],
                 later: [{ key: `timer-${r.id}`, at: new Date(world.now + 60000).toISOString(), about: "复查" }],
               }
             : {}),
@@ -94,12 +103,47 @@ export function simulate(seed = 0x5eed, steps = 200000) {
           else {
             world.call("delivered", "chat", card.id, card.version, `message-${card.id}`);
             if (card.state === "open")
-              world.call("answer", card.id, { choice: 0, by: "owner", channel: "chat", ref: `message-${card.id}` });
+              world.call("answer", card.id, {
+                choice: 0,
+                version: card.version,
+                by: "owner",
+                channel: "chat",
+                ref: `message-${card.id}`,
+              });
           }
         }
       } else if (op === 10) {
         faults.clock++;
         world.advance(-rng(120000));
+      } else if (op === 12) {
+        const card = rows(world.view, "cards").find((c) => c.kind === "ask" && c.state === "open");
+        if (card) {
+          world.call("ingest", "app", { id: `update-${step}`, type: card.rule, subject: card.lane });
+          const job = world.call("claimNext", card.agent === "a" ? "w1" : "w2", `update-${step}`);
+          if (job) {
+            const matching =
+              job.rule.name === card.rule && job.context.events.some((e: any) => e.subject === card.lane);
+            world.finish(job.run, {
+              outcome: "done",
+              ask: [{ title: "选择", text: `新内容 ${step}`, options: ["甲", "乙"], key: "question" }],
+            });
+            if (matching) {
+              faults.update++;
+              assert.equal(world.view.get("cards", card.id)!.version, card.version + 1);
+            }
+          }
+        }
+      } else if (op === 13) {
+        const card = rows(world.view, "cards").find((c) => c.content_version > 1);
+        if (card) {
+          faults.staleAnswer++;
+          const seq = world.view.seq;
+          assert.throws(
+            () => world.call("answer", card.id, { choice: 0, version: card.content_version - 1 }),
+            Conflict,
+          );
+          assert.equal(world.view.seq, seq, "拒绝旧回答也写了日志");
+        }
       } else {
         const card = rows(world.view, "cards").find((c) => c.kind === "ask");
         if (card) {

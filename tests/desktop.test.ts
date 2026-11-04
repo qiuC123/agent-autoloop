@@ -52,6 +52,8 @@ const body = (title: string) => `${title}\n${WORDS}`;
 const base: Card = {
   id: 5,
   version: 1,
+  content_version: 1,
+  input: null,
   ref: null,
   kind: "ask",
   state: "open",

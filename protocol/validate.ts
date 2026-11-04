@@ -4,7 +4,15 @@ import { InputError } from "../kernel/errors.ts";
 
 export const EVENT_TYPE = /^[a-z][a-z0-9_.-]{0,63}$/;
 export type Later = { key: string; at?: string; about?: string; cancel?: boolean };
-export type Ask = { title: string; text: string; options: string[]; recommend?: number; about?: string; key?: string };
+export type Ask = {
+  title: string;
+  text: string;
+  options: string[];
+  recommend?: number;
+  about?: string;
+  key?: string;
+  input?: string;
+};
 export type Notice = { title: string; text: string; key?: string };
 export type Usage = { input?: number; output?: number; cached?: number; cost?: number };
 
@@ -102,11 +110,12 @@ export function dateTime(value: unknown): boolean {
 }
 
 const validAsk = (ask: Item) =>
-  only(ask, ["title", "text", "options", "recommend", "about", "key"]) &&
+  only(ask, ["title", "text", "options", "recommend", "about", "key", "input"]) &&
   text(ask.title, 200) &&
   text(ask.text, 4000) &&
   optional(ask.about, 4000) &&
   optional(ask.key, 100) &&
+  (ask.input === undefined || text(ask.input, 20)) &&
   Array.isArray(ask.options) &&
   ask.options.length >= 2 &&
   ask.options.length <= 5 &&

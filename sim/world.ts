@@ -14,7 +14,7 @@ export const rules = parseRules(
       a: { name: "甲", worker: "w1", use: "command", command: ["true"] },
       b: { name: "乙", worker: "w2", use: "command", command: ["true"] },
     },
-    channels: { chat: { name: "通道", answerers: ["owner"] } },
+    channels: { chat: { name: "通道", answerers: ["owner"] }, plain: { name: "另一个通道" } },
     rules: [
       {
         name: "one",
@@ -55,7 +55,7 @@ export class World {
     this.log.push(...d.facts);
     this.view = evolve(this.view, d.facts);
     this.transitions++;
-    this.checked = invariants(this.view, this.log, before);
+    this.checked = invariants(this.view, this.log, before, input);
     return d.value;
   }
   call(type: string, ...args: any[]) {
@@ -78,8 +78,22 @@ export class World {
     const r = this.view.get("runs", id)!;
     return this.call("finish", id, credential(environment, "run", id, r.issued), result);
   }
+  deliverAll() {
+    for (const channel of Object.keys(rules.channels)) {
+      let card;
+      while ((card = this.call("nextCard", channel)))
+        this.call("delivered", channel, card.id, card.version, card.ref ?? `${channel}-${card.id}`);
+      for (const c of rows(this.view, "cards").filter((c) => c.content_version > 1 && !c.quiet)) {
+        const delivery = this.view.get("deliveries", `${c.id}:${channel}`);
+        // Exhausted retries and cards closed before their first send retain the protocol's delivery policy.
+        if (!delivery?.given_up && (c.state === "open" || delivery?.ref))
+          assert.equal(delivery?.version, c.version, "内容更新后通道没有追上最新版本");
+      }
+    }
+  }
   recover() {
     this.advance(86400000);
+    this.deliverAll();
     for (const r of rows(this.view, "runs").filter((r) => ["claimed", "unknown"].includes(r.state))) this.finish(r.id);
     this.call("heartbeat", "w1", []);
     this.call("heartbeat", "w2", []);
@@ -99,6 +113,7 @@ export class World {
       rows(this.view, "runs").every((r) => ["done", "nothing", "cancelled"].includes(r.state)),
       "故障停止后仍没结局",
     );
+    this.deliverAll();
     return rows(this.view, "runs").length;
   }
 }

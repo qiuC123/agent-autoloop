@@ -1,4 +1,5 @@
-// What reaches the owner. A card's words never change; only its state does. Failure cases: asking the same thing while it
+// What reaches the owner. Failure cases: content updates duplicate a card, accept stale answers or strand deliveries;
+// asking the same thing while it
 // is open makes a second card, or closed it blocks asking again; an answer takes a choice that doesn't exist, counts twice,
 // or beats a resolve that came first (only one may change an open card); an answer from someone not on the channel's list,
 // or on a message that isn't the one sent, counts; an answer doesn't wake the thread that asked, wakes another thread, is
@@ -17,7 +18,7 @@ const { ingest } = await import("../host/runtime.ts");
 const { claimNext, finish, started } = await import("../host/runtime.ts");
 const { answer, resolve, nextCard, delivered, failed, tell, cardByToken, answerByLink } =
   await import("../host/runtime.ts");
-const { AuthError, InputError, NotFound } = await import("../kernel/errors.ts");
+const { AuthError, Conflict, InputError, NotFound } = await import("../kernel/errors.ts");
 const { all, one, run } = await import("./storage.ts");
 
 const clean = () => {
@@ -44,6 +45,106 @@ function asked(n: number, now = at(0)) {
   finish(job.run, job.token, { outcome: "done", summary: "等你决定", session: `s-${n}`, ask: [question] }, now);
   return { job, id: one<{ id: number }>("SELECT id FROM cards WHERE run_id = ?", [job.run])!.id };
 }
+
+function submitAgain(n: number, receipt: object, minute: number) {
+  ingest("app", note(n, `update-${minute}`), at(minute));
+  const job = claim("w1", at(minute))!;
+  finish(job.run, job.token, { outcome: "done", ...receipt }, at(minute));
+  return job;
+}
+
+test("each content field updates the same open question, omissions clear fields, and duplicates do nothing", () => {
+  clean();
+  const { id } = asked(1);
+  let spec: any = { ...question };
+  let version = 1;
+  for (const change of [
+    { title: "改标题" },
+    { text: "改内容" },
+    { options: ["留着", "删"] },
+    { recommend: 0 },
+    { about: "新依据" },
+    { input: "返工意见" },
+    { recommend: undefined, about: undefined, input: undefined },
+  ]) {
+    spec = { ...spec, ...change };
+    submitAgain(1, { ask: [spec] }, version * 2);
+    version++;
+    assert.equal(all("SELECT id FROM cards").length, 1);
+    assert.deepEqual([card(id).version, card(id).content_version], [version, version]);
+    assert.equal(card(id).title, spec.title);
+    assert.equal(card(id).text, spec.text);
+    assert.deepEqual(JSON.parse(card(id).options), spec.options);
+    assert.equal(card(id).recommend, spec.recommend ?? null);
+    assert.equal(card(id).about, spec.about ?? "");
+    assert.equal(card(id).input, spec.input ?? null);
+    submitAgain(1, { ask: [spec] }, version * 2 - 1);
+    assert.equal(card(id).version, version);
+  }
+  const facts = all<any>("SELECT fact FROM facts").map(({ fact }) => JSON.parse(fact));
+  const outcomes = facts.flatMap((f) => f.meta?.cards ?? []).filter((c) => c.card === id);
+  assert.ok(outcomes.some((c) => c.action === "created"));
+  assert.ok(outcomes.some((c) => c.action === "updated"));
+  assert.ok(outcomes.some((c) => c.action === "duplicate"));
+});
+
+test("updates reach every channel at the same ref, including one that gave up on old content", () => {
+  clean();
+  const { id } = asked(1);
+  const first = nextCard("chat", at(0))!;
+  delivered("chat", id, first.version, "om_1", at(0));
+  for (const minute of [0, 1, 3, 7, 15, 25, 35, 45, 55]) {
+    const sent = nextCard("plain", at(minute))!;
+    failed("plain", id, sent.version, "断线", at(minute));
+  }
+  submitAgain(1, { ask: [{ ...question, text: "新内容" }] }, 60);
+  for (const channel of ["chat", "plain"]) {
+    const sent = nextCard(channel, at(60))!;
+    assert.deepEqual([sent.id, sent.version, sent.content_version, sent.text], [id, 2, 2, "新内容"]);
+    assert.equal(sent.ref, channel === "chat" ? "om_1" : null);
+    delivered(channel, id, sent.version, `${channel}-ref`, at(60));
+    delivered(channel, id, 1, "late-ref", at(60));
+    assert.equal(nextCard(channel, at(61)), null);
+  }
+});
+
+test("stale answers are rejected without facts, valid versions and legacy answers still work", () => {
+  clean();
+  const { id } = asked(1);
+  submitAgain(1, { ask: [{ ...question, options: ["新的甲", "新的乙"] }] }, 1);
+  const before = all("SELECT * FROM facts");
+  assert.throws(
+    () => answer(id, { choice: 0, version: 1 }, at(2)),
+    (error: any) => error instanceof Conflict && error.message === "卡片已更新，请重看",
+  );
+  for (const version of [null, 0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1])
+    assert.throws(() => answer(id, { choice: 0, version } as any, at(2)), InputError);
+  assert.deepEqual(all("SELECT * FROM facts"), before);
+  assert.equal(answer(id, { text: "重新考虑", version: 2 }, at(2)).changed, true);
+  assert.equal(card(id).content_version, 2);
+  assert.equal(answer(id, { choice: 0, version: 2 }, at(3)).changed, false);
+  const other = asked(2, at(4)).id;
+  submitAgain(2, { ask: [{ ...question, text: "兼容旧通道" }] }, 5);
+  assert.equal(answer(other, { choice: 0 }, at(6)).changed, true);
+});
+
+test("notices update too; different kinds, closed cards and once cards retain their behavior", () => {
+  clean();
+  const { id } = asked(1);
+  submitAgain(1, { notice: [{ key: question.key, title: "通知", text: "不同类型" }] }, 1);
+  assert.equal(card(id).kind, "ask");
+  assert.equal(card(id).version, 1);
+  resolve(id, "关闭", "owner", at(2));
+  submitAgain(1, { notice: [{ key: question.key, title: "通知", text: "原文" }] }, 3);
+  const notice = all<any>("SELECT * FROM cards WHERE state = 'open'")[0];
+  submitAgain(1, { notice: [{ key: question.key, title: "通知", text: "更新" }] }, 4);
+  assert.deepEqual([card(notice.id).text, card(notice.id).content_version], ["更新", 2]);
+  assert.throws(() => answer(notice.id, { version: 1 }, at(5)), Conflict);
+  assert.equal(answer(notice.id, { version: 2 }, at(5)).changed, true);
+  const once = tell("source:app:once", "只说一次", "原文", at(6));
+  tell("source:app:once", "新标题", "不同内容", at(7));
+  assert.deepEqual([card(once.card).text, card(once.card).version], ["原文", 1]);
+});
 
 test("the same question isn't asked twice while it's open, and can be asked again once it's closed", () => {
   clean();

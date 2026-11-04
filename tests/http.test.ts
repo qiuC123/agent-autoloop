@@ -340,6 +340,32 @@ test("a card's link takes words of your own, and a notice has one button", async
   assert.equal(stored(told.id).state, "closed");
 });
 
+test("the link carries its displayed version and input label; stale HTTP and form answers leave it open", async () => {
+  const { fixtureClear } = await import("../host/runtime.ts");
+  for (const table of ["events", "runs", "run_events", "cards", "deliveries", "timers", "seen"] as const)
+    fixtureClear(table);
+  const spec = { title: "更新测试", text: "原文", options: ["甲", "乙"], key: "update-http", input: '意见"<>&' };
+  const { id, path } = await linkFor(63, { ask: [spec] });
+  const page = await call(path);
+  assert.equal(page.status, 200);
+  assert.equal(page.text.match(/type="hidden" name="version" value="1"/g)?.length, 2);
+  assert.match(page.text, /placeholder="意见&quot;&lt;&gt;&amp;"/);
+  await call("/v1/events", { key: keys.app, body: { id: "http-update-63", type: "feedback.new", subject: "#63" } });
+  const work = await call("/v1/work?claim=http-update-63&wait=0", { key: keys.w1 });
+  const job = work.json.job;
+  await call(`/v1/runs/${job.run}/result`, {
+    key: job.token,
+    body: { outcome: "done", ask: [{ ...spec, text: "新文" }] },
+  });
+  const stale = await call(`/v1/cards/${id}/answer`, { key: keys.owner, body: { choice: 0, version: 1 } });
+  assert.deepEqual([stale.status, stale.json.error], [409, "卡片已更新，请重看"]);
+  assert.equal((await form(path, "text=old&version=1")).status, 409);
+  assert.equal(stored(id).state, "open");
+  assert.match((await call(path)).text, /name="version" value="2"/);
+  assert.equal((await form(path, "text=new&version=2")).status, 303);
+  assert.equal(stored(id).answer, "new");
+});
+
 test("someone else's webhook goes through its source's adapter: signed, or not taken", async () => {
   const items = JSON.stringify({
     items: [

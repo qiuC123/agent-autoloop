@@ -26,6 +26,15 @@ const edits: [string, string, string, string][] = [
   ["receipt-conflict", "decide.ts", "if (prior.last_result !== hash)", "if (false)"],
   ["run-capability", "decide.ts", 'credential(draft.env, "run", id, run.issued) !== token', "false"],
   ["answer-first", "decide.ts", 'if (card.state !== "open")', "if (false)"],
+  ["card-update", "decide.ts", "if (!update || spec.once ||", "if (true || spec.once ||"],
+  ["card-duplicate", "decide.ts", "existing.kind !== spec.kind || !changed", "existing.kind !== spec.kind"],
+  ["card-kind", "decide.ts", "existing.kind !== spec.kind || !changed", "!changed"],
+  ["card-content-version", "decide.ts", "content_version: version", "content_version: existing.content_version"],
+  ["card-input", "decide.ts", "existing[key] !== value", 'key !== "input" && existing[key] !== value'],
+  ["answer-stale", "decide.ts", "given.version < card.content_version", "false"],
+  ["answer-version-type", "decide.ts", "!Number.isSafeInteger(given.version) || given.version < 1", "false"],
+  ["card-delivery-revive", "decide.ts", "...NOT_TRYING, given_up: 0, error: null", "...NOT_TRYING, error: null"],
+  ["card-legacy-version", "evolve.ts", "content_version: 1, input: null", "content_version: row.version, input: null"],
   ["answer-person", "decide.ts", 'if (allowed && !allowed.includes(given.by ?? ""))', "if (false)"],
   ["answer-message", "decide.ts", "if (!delivery?.ref || delivery.ref !== given.ref)", "if (false)"],
   [
@@ -61,7 +70,9 @@ const edits: [string, string, string, string][] = [
   ["log-append", "store.ts", "for (const fact of facts) insert.run", "for (const fact of []) insert.run"],
   ["transaction-removed", "store.ts", "return transaction(db, () => {", "return ((work) => work())(() => {"],
 ];
-const tests = ["kernel", "events", "cards", "runs", "schedule", "stream", "purity"].map((n) => `tests/${n}.test.ts`);
+const tests = ["kernel", "events", "cards", "runs", "schedule", "stream", "purity", "projection"].map(
+  (n) => `tests/${n}.test.ts`,
+);
 export function mutate() {
   const root = join(import.meta.dirname, "..");
   const folder = mkdtempSync(join(tmpdir(), "agent-autoloop-mutation-"));

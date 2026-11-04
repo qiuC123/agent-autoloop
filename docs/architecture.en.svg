@@ -72,7 +72,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 <!-- Center: Autoloop kernel -->
 <rect class="core" x="250" y="68" width="460" height="316" rx="22"/>
 <text x="272" y="102" class="cte">Autoloop kernel</text>
-<text x="688" y="101" class="cs" text-anchor="end">~1,650 lines · 0 deps · Deterministic</text>
+<text x="688" y="101" class="cs" text-anchor="end">~1,700 lines · 0 deps · Deterministic</text>
 
 <!-- Core responsibility -->
 <rect class="duty" x="268" y="116" width="424" height="52" rx="10"/>
@@ -136,7 +136,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 
 <rect class="plug" x="390" y="452" width="548" height="92" rx="14"/>
 <text x="410" y="480" class="h2">Channel plugins</text>
-<text x="560" y="480" class="s">Deliver cards to your hand</text>
+<text x="560" y="480" class="s">Update cards · options or text</text>
 <rect class="item" x="410" y="494" width="104" height="36" rx="8"/>
 <text x="462" y="517" class="r" text-anchor="middle">Desktop</text>
 <rect class="item" x="524" y="494" width="90" height="36" rx="8"/>

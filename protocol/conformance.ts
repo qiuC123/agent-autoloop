@@ -117,7 +117,34 @@ export async function conformance(base: string, config: Probe, request: typeof f
   }
   const [card, other] = cards.filter(({ kind, title }) => kind === "ask" && title.endsWith(tag));
   assert.ok(card && other);
-  const answer = { choice: 0, by: config.answerer, ref: `probe-${card.id}` };
+  const resubmit = async (suffix: string, ask: object) => {
+    await call("/v1/events", keys.source, { ...event, id: `${tag}-${suffix}` });
+    const job = (await take()).job;
+    assert.ok(job);
+    await call(`/v1/runs/${job.run}/result`, job.token, { outcome: "done", ask: [ask] });
+  };
+  await resubmit("duplicate", result.ask[0]);
+  assert.equal((await call("/v1/cards/next?wait=0", keys.channel)).card, null, "相同内容不重发");
+  await resubmit("update", { ...result.ask[0], text: "新内容", input: "返工意见" });
+  const updated = (await call("/v1/cards/next?wait=0", keys.channel)).card;
+  assert.deepEqual(checkSchema("card", updated), []);
+  assert.deepEqual(
+    [updated.id, updated.version, updated.content_version, updated.ref, updated.input],
+    [card.id, card.version + 1, card.version + 1, `probe-${card.id}`, "返工意见"],
+  );
+  await call(`/v1/cards/${card.id}/delivered`, keys.channel, { version: updated.version, ref: updated.ref });
+  const answer = { choice: 0, version: updated.version, by: config.answerer, ref: updated.ref };
+  const stale = await call(
+    `/v1/cards/${card.id}/answer`,
+    keys.channel,
+    { ...answer, version: card.version },
+    409,
+    "error",
+  );
+  assert.equal(stale.error, "卡片已更新，请重看");
+  await call(`/v1/cards/${card.id}/answer`, keys.owner, { text: "旧答案", version: card.version }, 409);
+  for (const version of [0, -1, 1.5, "2", null])
+    await call(`/v1/cards/${card.id}/answer`, keys.owner, { choice: 0, version }, 400);
   await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, by: "not-allowed" }, 401);
   await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, ref: "wrong" }, 401);
   await call(`/v1/cards/${card.id}/answer`, keys.channel, { ...answer, choice: 99 }, 400);

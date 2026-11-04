@@ -209,7 +209,15 @@ async function join(args: string[]) {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type Card = { id: number; kind: string; title: string; text: string; options: string[]; recommend: number | null };
+type Card = {
+  version: number;
+  id: number;
+  kind: string;
+  title: string;
+  text: string;
+  options: string[];
+  recommend: number | null;
+};
 
 function showCard(card: Card) {
   console.log(`\n【${card.kind === "ask" ? "等你决定" : "要你留意"}】#${card.id} ${card.title}`);
@@ -264,7 +272,7 @@ async function tryIt() {
       const terminal = createInterface({ input: process.stdin, output: process.stdout });
       const choice = await chooseAt(terminal, card);
       terminal.close();
-      await owner.answer(card.id, { choice });
+      await owner.answer(card.id, { choice, version: card.version });
       console.log("收到，Agent 接着干……");
       continue;
     }

@@ -7,6 +7,7 @@ import { execFile, spawn } from "node:child_process";
 import readline from "node:readline";
 import { command } from "../../host/command.ts";
 import type { Card, ChannelContext } from "../../host/channels.ts";
+import { HubError } from "../../protocol/client.ts";
 
 function outcomeOf(card: Card) {
   const chosen = card.choice === null ? card.answer : card.options[card.choice];
@@ -27,10 +28,25 @@ export function render(card: Card) {
     border_color: index === card.recommend ? "blue" : "grey",
     corner_radius: "8px",
     padding: "8px 12px 8px 12px",
-    behaviors: [{ type: "callback", value: { card: card.id, choice: index } }],
+    behaviors: [{ type: "callback", value: { card: card.id, choice: index, version: card.version } }],
     elements: [{ tag: "div", text: { tag: "plain_text", content: label } }],
   });
   const afterwards = outcome ? [{ tag: "markdown", content: `**${outcome}**` }] : [];
+  const label = { tag: "plain_text", content: card.input ?? "别的想法" };
+  const form = {
+    tag: "form",
+    name: "answer_form",
+    elements: [
+      { tag: "input", name: "answer_text", label, placeholder: label, required: true },
+      {
+        tag: "button",
+        name: "answer_submit",
+        text: { tag: "plain_text", content: "发送" },
+        form_action_type: "submit",
+        behaviors: [{ type: "callback", value: { card: card.id, text: true, version: card.version } }],
+      },
+    ],
+  };
   return {
     schema: "2.0",
     config: { update_multi: true, enable_forward: false },
@@ -42,6 +58,7 @@ export function render(card: Card) {
       elements: [
         ...(card.text ? [{ tag: "markdown", content: card.text }] : []),
         ...(card.state === "open" ? card.options.map(option) : afterwards),
+        ...(card.state === "open" && card.kind === "ask" ? [form] : []),
       ],
     },
   };
@@ -109,9 +126,27 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   async function clicked(line: string) {
     const event = JSON.parse(line);
     const value = JSON.parse(event.action_value);
-    if (!Number.isInteger(value.card) || !Number.isInteger(value.choice)) return;
-    const answer = await hub.answer(value.card, { choice: value.choice, by: event.operator_id, ref: event.message_id });
-    log(`card ${value.card}: answered by ${event.operator_id}, ${answer.changed ? "counted" : "already settled"}`);
+    if (!value || !Number.isSafeInteger(value.card) || value.card < 1) return;
+    const text = value.text === true ? JSON.parse(event.form_value || "{}")?.answer_text : undefined;
+    if (value.text === true ? typeof text !== "string" || !text.trim() : !Number.isInteger(value.choice)) return;
+    const body = {
+      ...(value.text === true ? { text } : { choice: value.choice }),
+      ...(value.version !== undefined && { version: value.version }),
+      by: event.operator_id,
+      ref: event.message_id,
+    };
+    try {
+      const answer = await hub.answer(value.card, body);
+      log(`card ${value.card}: answered by ${event.operator_id}, ${answer.changed ? "counted" : "already settled"}`);
+    } catch (error) {
+      if (!(error instanceof HubError) || error.status !== 409 || error.message !== "卡片已更新，请重看") throw error;
+      // lark-cli auto-acknowledges callbacks; consume cannot return a toast (1.0.96 card-action documentation).
+      await lark(
+        ["im", "+messages-reply", "--message-id", event.message_id, "--as", "bot", "--text", error.message],
+        "",
+      );
+      log(`card ${value.card}: ${error.message}`);
+    }
   }
 
   async function listen() {

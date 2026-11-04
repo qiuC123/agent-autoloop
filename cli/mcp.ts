@@ -11,7 +11,7 @@ const specs = [
   [
     "answer",
     "回答卡片；选项从 0 开始，也可以写自己的答案",
-    { card: positive, choice: { type: "integer", minimum: 0 }, text: string },
+    { card: positive, choice: { type: "integer", minimum: 0 }, text: string, version: positive },
     ["card"],
   ],
   ["resolve", "将卡片结案，写明已核实的结果", { card: positive, reason: string }, ["card", "reason"]],

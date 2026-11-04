@@ -106,7 +106,8 @@ async function cardAtLink(call: Call, linkToken: string) {
   }
   const form = new URLSearchParams(await readText(request));
   const choice = form.has("choice") && { choice: Number(form.get("choice")) };
-  act(call, "answer", card.id, { ...choice, text: form.get("text") ?? undefined, by: "链接" });
+  const version = form.has("version") ? Number(form.get("version")) : undefined;
+  act(call, "answer", card.id, { ...choice, text: form.get("text") ?? undefined, version, by: "链接" });
   return new Response(null, { status: 303, headers: { location: call.url.pathname, ...NO_STORE } });
 }
 
@@ -181,7 +182,7 @@ async function cardAction(call: Call, id: number, action: string) {
   }
   if (action === "answer") {
     const who = channel ? { by: given?.by, ref: given?.ref, channel } : { by: "本人" };
-    return json(act(call, "answer", id, { choice: given?.choice, text: given?.text, ...who }));
+    return json(act(call, "answer", id, { choice: given?.choice, text: given?.text, version: given?.version, ...who }));
   }
   if (!Number.isInteger(given?.version)) throw new InputError("要说明是哪个版本");
   const ref = typeof given.ref === "string" ? given.ref : null;

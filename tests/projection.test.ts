@@ -2,6 +2,7 @@
 // restart replays all history, reuses a deleted ID, or trusts an incompatible projection;
 // opening a second process briefly drops views used by the running service;
 // history size forces a point lookup to scan or populate a whole JavaScript table.
+// Old cards must acquire creation content_version, not their latest state version, on rebuild without rewriting facts.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -9,6 +10,19 @@ import { empty, evolve, rows, snapshot, type Fact } from "../kernel/evolve.ts";
 import { commit, openView } from "../kernel/store.ts";
 
 const fact = (seq: number, changes: Fact["changes"]): Fact => ({ version: 1, seq, at: seq, type: "fixture", changes });
+test("old logs rebuild cards with content_version 1 without changing their historical state or facts", () => {
+  const db = new DatabaseSync(":memory:");
+  const view = openView(db, "old-format");
+  const old = { id: 1, version: 4, kind: "ask", state: "done", title: "旧卡片", options: '["甲","乙"]' };
+  const log = fact(1, [{ table: "cards", key: "1", row: old }]);
+  commit(db, view, () => [log]);
+  const saved = db.prepare("SELECT fact FROM facts").get()!.fact;
+  const rebuilt = openView(db, "new-format");
+  assert.deepEqual(rebuilt.get("cards", 1), { content_version: 1, input: null, ...old });
+  assert.equal(db.prepare("SELECT fact FROM facts").get()!.fact, saved);
+  assert.deepEqual(snapshot(openView(db, "new-format")), snapshot(rebuilt));
+  db.close();
+});
 test("a draft overlays filtered reads without changing the base", () => {
   const base = evolve(empty(), [
     fact(1, [

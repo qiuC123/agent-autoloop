@@ -53,6 +53,8 @@ export function cardView(card: Row, env: Environment, ref: string | null = null,
   return {
     id,
     version,
+    content_version: card.content_version,
+    input: card.input,
     ref,
     kind,
     state,

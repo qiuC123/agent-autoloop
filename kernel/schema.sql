@@ -55,6 +55,7 @@ CREATE TABLE cards (
   options TEXT NOT NULL DEFAULT '[]',
   recommend INTEGER,
   about TEXT NOT NULL DEFAULT '',
+  input TEXT,
   state TEXT NOT NULL,
   fyi INTEGER NOT NULL DEFAULT 0,
   quiet INTEGER NOT NULL DEFAULT 0,
@@ -72,6 +73,7 @@ CREATE TABLE cards (
   answer_event INTEGER,
   token TEXT NOT NULL UNIQUE,
   version INTEGER NOT NULL DEFAULT 1,
+  content_version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   decided_at TEXT,
   closed_at TEXT

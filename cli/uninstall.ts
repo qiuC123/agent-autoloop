@@ -1,10 +1,11 @@
 // `agent-autoloop uninstall`: takes away what the install put on this computer and nothing else. A link is ours only if it really
 // leads to this program: someone else's agent-autoloop, or a folder of their own by that name, stays where it is.
-import { existsSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "../host/home.ts";
 import { removeService, stopUp } from "../host/service.ts";
+import { windowsLauncher } from "../host/windows-launcher.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 
@@ -23,7 +24,17 @@ function removeLinks() {
   const program = path.join(ROOT, "bin", "agent-autoloop.ts");
   const onPath = (process.env.PATH ?? "").split(path.delimiter).filter((place) => path.isAbsolute(place));
   const places = [path.join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", ...onPath];
-  for (const place of new Set(places)) removeLink(path.join(place, "agent-autoloop"), program);
+  for (const place of new Set(places)) {
+    removeLink(path.join(place, "agent-autoloop"), program);
+    if (process.platform === "win32") {
+      const command = path.join(place, "agent-autoloop.cmd");
+      const launcher = windowsLauncher(process.execPath, program);
+      if (lstatSync(command, { throwIfNoEntry: false })?.isFile() && readFileSync(command, "utf8") === launcher) {
+        rmSync(command);
+        console.log(`删掉了 ${command}`);
+      }
+    }
+  }
   const skill = path.join(ROOT, "skills", "agent-autoloop");
   for (const agent of [".claude", ".codex"]) removeLink(path.join(homedir(), agent, "skills", "agent-autoloop"), skill);
 }

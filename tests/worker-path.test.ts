@@ -30,7 +30,7 @@ test("install paths and command arguments stay literal through the worker wrappe
       name: "Agent",
       use: "command",
       access: "edit",
-      command: ["echo", "literal $(touch argv-injected)"],
+      command: [process.execPath, "-e", "console.log(process.argv[1])", "literal $(touch argv-injected)"],
     },
     context: { events: [], answers: [], timers: [], waiting: [], open: [], decided: [] },
   };

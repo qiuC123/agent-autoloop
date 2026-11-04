@@ -66,6 +66,8 @@
 
 排队和等待重试的任务在领取时一起采用最新的 Agent、目录、提示词和权限；换了 Agent 就不带旧 Agent 的会话。已经领取的任务保留领取时的 Job 配置和接单程序，重复 claim、心跳、停止和重启恢复都不随规则更新换人。事件已经归属的事项不重新拆分或合并；回执中的事件许可和通知方式仍按提交时的规则核验。
 
+工作目录接受 Unix 绝对路径、`~/`，以及 Windows 盘符绝对路径（`C:/work`、`C:\work`）、UNC（`\\server\share\work`）和 `~\`；拒绝 `C:work`、`\work` 等含糊的相对路径。HTTP 字段不变，目录仍由可信规则指定。
+
 ## 来源：把世界变成事件
 
 ```
@@ -103,7 +105,8 @@ GET /v1/work?claim=<这次领活的编号>&wait=50&running=7,8&capacity=1    Aut
 
 - 没活时最多等 `wait` 秒，新活一来立即返回。`running` 是手上在跑的，同时也是心跳。`capacity=0` 只报到、不领活。
 - 响应丢了，用同一个 `claim` 再来一次，拿回的是同一份活。
-- `cancel` 是要停掉的。接单程序先向整个进程组发停止信号，10 秒后仍有进程运行就强制结束；确认组内没有活进程后才交 `outcome: "cancelled"`，这个事项才放开。停止期间重启接单程序也继续这一步。
+- `cancel` 是要停掉的。POSIX 接单程序先向整个进程组发停止信号，10 秒后仍有进程运行就强制结束；Windows 用 Job Object 立即结束整个进程树。确认没有活进程后才交 `outcome: "cancelled"`，这个事项才放开。停止期间重启接单程序也继续这一步。
+- Windows 10/11 使用系统 .NET Framework 4.x 编译私有目录中的进程托管器。进程在创建时原子加入禁止脱离的 Job，唯一的长期 Job 句柄由托管器持有，关闭即终止整树；因此外部强杀托管器也清理子孙。重启根据持久化的随机 Job 名检查和停止，不凭可能重用的 PID。启动参数文件的独占锁覆盖尚未创建 Job 的阶段；恢复方拿到同一锁后才可撤销迟到启动，不能先释放轮次再让旧托管器执行业务。中台自身退出不会关闭独立托管器，重启可认领原有 Agent。独立账号沙箱可能无权读取当前用户的私有资料；接单程序不扩大 ACL 或自动改用完整权限。PATH 和登录目录继承启动终端，npm Node shim 解析为 Node 参数，不经过命令解释器；其他 batch 命令请明确写 `node` 与脚本或使用原生程序。
 
 ```jsonc
 // Job：一轮的全部。token 只对这一轮的这一次执行有效。
@@ -229,6 +232,8 @@ POST /v1/runs/12/cancel     {}
 
 `/v1/state` 的 `spending.today`、`spending.week` 独立于分页，按规则时区的今天和过去 7 × 24 小时的完成时间汇总。每项含 `rounds`、`tokens`、`cost`、`missingTokens`、`missingCost`，后两项是没报对应用量的轮数；从未开始就取消的轮次不计入。旧请求和响应字段保持不变，旧客户端可以忽略新增字段；新版 `status` 需要中台一起更新，不再逐页读取历史来算费用。
 
+Windows 后台使用当前用户登录时启动的计划任务，`InteractiveToken`、最低权限、`IgnoreNew` 单实例、失败一分钟后重启；不存密码，不改系统 PATH。安装时保留终端 PATH，登录状态仍由 Agent 自己读取。启动日志追加到 `logs/up.log`。同一数据目录另用带随机凭据的本地命名管道拒绝第二个中台；停止通过该管道核对身份并退出，保留独立 Agent。`service remove` 删除属于当前安装的任务并停止中台；卸载保留数据。
+
 安装与卸载不改变 HTTP 协议。`agent-autoloop --version` 显示包版本与提交；`agent-autoloop uninstall` 确认后移除自身程序、链接和服务，始终保留规则、密钥和记录；`--yes` 只跳过确认。
 
 ## 失败时会怎样
@@ -308,9 +313,9 @@ Node 请求转换层保持在 50 行内；文件、SQLite 连接、监听和定�
 
 Webhook 通道的 `config.json` 配置使用 `use: "webhook"`、`url` 和 `platform`，后者可选 `dingtalk`、`wecom`、`slack`、`discord`。不写 platform 时可用 `body` 自定义模板，字符串里的 `{text}` 替换为卡片内容。四个模板对照官方文档：[钉钉](https://open.dingtalk.com/document/orgapp/custom-bot-send-message-type)、[企微](https://developer.work.weixin.qq.com/document/path/91770)、[Slack](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/)、[Discord](https://discord.com/developers/docs/resources/webhook#execute-webhook)。钉钉和企微检查响应的 `errcode`，Slack 检查 `ok`；Discord 禁止文字触发提及。超过企微 2048 字节或 Discord 2000 字的卡片会报告失败，不截断问题或回答链接。Webhook 本身没有幂等保证，消息发送成功但报告丢失时可能重发。
 
-桌面通知 `desktop` 是新安装默认打开的通道：macOS 用 `osascript`，Linux 用 `notify-send`。通知标题是“Agent 问你一个问题”，正文是卡片标题和“运行 agent-autoloop status 查看”；文字通过 `--` 后的参数传入，不拼进脚本。没有图形会话时不调用通知程序，报告 `skipped-<卡片编号>`，不反复打扰；卡片仍可通过命令行查看和回答。有图形会话但通知命令不存在或失败时报告 `failed`，由中台安排重试。卡片更新只报告，不重复弹出。
+桌面通知 `desktop` 是新安装默认打开的通道：macOS 用 `osascript`，Linux 用 `notify-send`，Windows 用 PowerShell 和系统 `NotifyIcon`。通知标题是“Agent 问你一个问题”，正文是卡片标题和“运行 agent-autoloop status 查看”；POSIX 文字通过 `--` 后的参数传入，Windows 以 UTF-8 Base64 参数交给固定脚本，均不拼进脚本。Windows 的显示由用户通知设置决定，无需注册应用。没有图形会话时不调用通知程序，报告 `skipped-<卡片编号>`，不反复打扰；卡片仍可通过命令行查看和回答。有图形会话但通知命令不存在或失败时报告 `failed`，由中台安排重试。卡片更新只报告，不重复弹出。
 
-`examples/worker.sh` 和 `examples/channel.sh` 只用 shell 内置命令、curl、jq。设置 `AGENT_AUTOLOOP_URL`、`AGENT_AUTOLOOP_KEY` 后运行；`AGENT_AUTOLOOP_ONCE=1` 只领一次。接单示例交回 `AGENT_AUTOLOOP_RECEIPT` 中的 JSON，默认交回完成；通道示例把卡片输出到终端，再报告送达。它们是短任务示例，不适合长任务；长任务使用 `worker/` 的心跳、停止和恢复。`tests/examples.test.ts` 在通过协议一致性检查的临时中台上实际运行两个脚本，覆盖提问、送达、回答、继续和错误密钥。
+`examples/worker.ts` 和 `examples/channel.ts` 可用 Node 24 在三个平台运行；POSIX 另有只用 shell 内置命令、curl、jq 的 `.sh` 版本。设置 `AGENT_AUTOLOOP_URL`、`AGENT_AUTOLOOP_KEY` 后运行；`AGENT_AUTOLOOP_ONCE=1` 只领一次。接单示例交回 `AGENT_AUTOLOOP_RECEIPT` 中的 JSON，默认交回完成；通道示例把卡片输出到终端，再报告送达。它们是短任务示例，不适合长任务；长任务使用 `worker/` 的心跳、停止和恢复。`tests/examples.test.ts` 在通过协议一致性检查的临时中台上实际运行两个脚本，覆盖提问、送达、回答、继续和错误密钥。
 
 ## 业务场景模板
 

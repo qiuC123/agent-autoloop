@@ -91,44 +91,48 @@ async function freePort() {
   return port;
 }
 
-test("ops-alerts: the curl in the README reaches the rule, and that key can't set off the restart", async () => {
-  const home = mkdtempSync(join(scratch, "ops-"));
-  const port = await freePort();
-  const env = { AGENT_AUTOLOOP_HOME: home };
-  writeFileSync(join(home, "rules.json"), readFileSync(join(RECIPES, "ops-alerts", "rules.json")));
-  const key = agentAutoloop(["key", "new", "source", "shop"], env).stdout.trim().split("\n").at(-1)!;
-  const url = `http://127.0.0.1:${port}`;
-  writeFileSync(join(home, "config.json"), JSON.stringify({ url, hub: { listen: `127.0.0.1:${port}` } }));
-  const hub = spawn(
-    process.execPath,
-    ["--disable-warning=ExperimentalWarning", join(ROOT, "bin", "agent-autoloop.ts"), "up"],
-    { env: { ...cleanEnv(), ...env }, stdio: "ignore" },
-  );
-  try {
-    for (let tries = 0; tries < 100; tries++) {
-      const up = await fetch(`${url}/healthz`).catch(() => null);
-      if (up?.ok) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+test(
+  "ops-alerts: the curl in the README reaches the rule, and that key can't set off the restart",
+  { skip: process.platform === "win32" && "POSIX curl example" },
+  async () => {
+    const home = mkdtempSync(join(scratch, "ops-"));
+    const port = await freePort();
+    const env = { AGENT_AUTOLOOP_HOME: home };
+    writeFileSync(join(home, "rules.json"), readFileSync(join(RECIPES, "ops-alerts", "rules.json")));
+    const key = agentAutoloop(["key", "new", "source", "shop"], env).stdout.trim().split("\n").at(-1)!;
+    const url = `http://127.0.0.1:${port}`;
+    writeFileSync(join(home, "config.json"), JSON.stringify({ url, hub: { listen: `127.0.0.1:${port}` } }));
+    const hub = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", join(ROOT, "bin", "agent-autoloop.ts"), "up"],
+      { env: { ...cleanEnv(), ...env }, stdio: "ignore" },
+    );
+    try {
+      for (let tries = 0; tries < 100; tries++) {
+        const up = await fetch(`${url}/healthz`).catch(() => null);
+        if (up?.ok) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      const curl = /```bash\n(curl [\s\S]*?)```/.exec(readDoc("ops-alerts"))?.[1];
+      assert.ok(curl, "README 里要有一条 curl");
+      const sent = spawnSync("sh", ["-c", curl.replaceAll("http://127.0.0.1:3350", url)], {
+        env: { ...cleanEnv(), SHOP_KEY: key },
+        encoding: "utf8",
+      });
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.deepEqual(JSON.parse(sent.stdout).routed, ["查线上报错"]);
+      const restart = await fetch(`${url}/v1/events`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ id: "from-outside", type: "restart", subject: "checkout" }),
+      });
+      assert.deepEqual((await restart.json()).routed, []);
+    } finally {
+      hub.kill("SIGTERM");
+      await new Promise((resolve) => hub.once("exit", resolve));
     }
-    const curl = /```bash\n(curl [\s\S]*?)```/.exec(readDoc("ops-alerts"))?.[1];
-    assert.ok(curl, "README 里要有一条 curl");
-    const sent = spawnSync("sh", ["-c", curl.replaceAll("http://127.0.0.1:3350", url)], {
-      env: { ...cleanEnv(), SHOP_KEY: key },
-      encoding: "utf8",
-    });
-    assert.equal(sent.status, 0, sent.stderr);
-    assert.deepEqual(JSON.parse(sent.stdout).routed, ["查线上报错"]);
-    const restart = await fetch(`${url}/v1/events`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-      body: JSON.stringify({ id: "from-outside", type: "restart", subject: "checkout" }),
-    });
-    assert.deepEqual((await restart.json()).routed, []);
-  } finally {
-    hub.kill("SIGTERM");
-    await new Promise((resolve) => hub.once("exit", resolve));
-  }
-});
+  },
+);
 
 // Stands in for gh and does what gh does with --jq, so the watcher's own filter really runs.
 const FAKE_GH = `#!/bin/sh
@@ -168,32 +172,40 @@ function watch(args: string[]) {
   return { said: done.stdout, asked: readFileSync(join(dir, "log"), "utf8"), issues };
 }
 
-test("github-issues: what the watcher prints goes through the worker whole, and the rules let it in", () => {
-  const { said, issues } = watch(["owner/repo"]);
-  const { result, problem } = resultFrom(readMessage(said), {});
-  assert.equal(problem, undefined);
-  assert.equal(result.outcome, "done");
-  const events = result.events!;
-  assert.equal(events[0].id, "issue-12");
-  assert.equal(events[0].subject, "#12");
-  assert.equal(events[0].summary, issues[0].title);
-  assert.equal(events[0].detail, issues[0].body, "the body has to reach an Agent that can't go and read it");
-  assert.equal(events[0].link, issues[0].url);
-  assert.equal(events[1].detail, "");
-  assert.equal([...events[2].detail].length, 4000);
-  const rules = readRules("github-issues").rules;
-  const watcher = rules.find((rule: { emits?: unknown }) => rule.emits);
-  const handler = rules.find((rule: { skill?: string }) => rule.skill);
-  for (const { type } of events) {
-    assert.ok(watcher.emits.types.includes(type));
-    assert.ok(handler.when.types.includes(type));
-  }
-  assert.equal(handler.when.source, watcher.emits.source);
-});
+test(
+  "github-issues: what the watcher prints goes through the worker whole, and the rules let it in",
+  { skip: process.platform === "win32" && "POSIX gh/jq example" },
+  () => {
+    const { said, issues } = watch(["owner/repo"]);
+    const { result, problem } = resultFrom(readMessage(said), {});
+    assert.equal(problem, undefined);
+    assert.equal(result.outcome, "done");
+    const events = result.events!;
+    assert.equal(events[0].id, "issue-12");
+    assert.equal(events[0].subject, "#12");
+    assert.equal(events[0].summary, issues[0].title);
+    assert.equal(events[0].detail, issues[0].body, "the body has to reach an Agent that can't go and read it");
+    assert.equal(events[0].link, issues[0].url);
+    assert.equal(events[1].detail, "");
+    assert.equal([...events[2].detail].length, 4000);
+    const rules = readRules("github-issues").rules;
+    const watcher = rules.find((rule: { emits?: unknown }) => rule.emits);
+    const handler = rules.find((rule: { skill?: string }) => rule.skill);
+    for (const { type } of events) {
+      assert.ok(watcher.emits.types.includes(type));
+      assert.ok(handler.when.types.includes(type));
+    }
+    assert.equal(handler.when.source, watcher.emits.source);
+  },
+);
 
-test("github-issues: the watcher's search is optional, and the rules use it to leave old issues alone", () => {
-  assert.doesNotMatch(watch(["owner/repo"]).asked, /--search/);
-  assert.match(watch(["owner/repo", "created:>=2026-11-04"]).asked, /--search created:>=2026-11-04/);
-  const { agents } = readRules("github-issues");
-  assert.ok(agents.watcher.command.some((part: string) => part.startsWith("created:>=")));
-});
+test(
+  "github-issues: the watcher's search is optional, and the rules use it to leave old issues alone",
+  { skip: process.platform === "win32" && "POSIX gh/jq example" },
+  () => {
+    assert.doesNotMatch(watch(["owner/repo"]).asked, /--search/);
+    assert.match(watch(["owner/repo", "created:>=2026-11-04"]).asked, /--search created:>=2026-11-04/);
+    const { agents } = readRules("github-issues");
+    assert.ok(agents.watcher.command.some((part: string) => part.startsWith("created:>=")));
+  },
+);

@@ -7,7 +7,6 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -16,16 +15,17 @@ import {
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
+import { privateDirectory, writePrivateFile } from "../host/private.ts";
 import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
+import { launchWindows, windowsAlive, windowsStop } from "./windows.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
 const TIMEOUT_MINUTES = 180;
@@ -57,6 +57,7 @@ type Entry = {
   triedFresh: boolean;
   usage?: Usage;
   pid?: number;
+  windowsJob?: string;
   launchedAt?: number;
   finishedAt?: number;
   told?: string;
@@ -78,7 +79,7 @@ export type WorkerOptions = {
 
 function save(entry: Entry) {
   const file = path.join(entry.dir, "entry.json");
-  writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
+  writePrivateFile(`${file}.tmp`, JSON.stringify(entry));
   renameSync(`${file}.tmp`, file);
 }
 
@@ -105,6 +106,8 @@ const files = (entry: Entry) => ({
 const marker = (entry: Entry) => `agent-autoloop-run:${entry.run}:${entry.attempt}:${entry.turn}`;
 
 function alive(entry: Entry) {
+  if (process.platform === "win32")
+    return !!entry.windowsJob && windowsAlive(entry.windowsJob, `${files(entry).exit}.launch`);
   if (!entry.pid) return false;
   try {
     const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
@@ -115,12 +118,17 @@ function alive(entry: Entry) {
 }
 
 function signal(entry: Entry, name: NodeJS.Signals) {
+  if (process.platform === "win32") {
+    if (entry.windowsJob) windowsStop(entry.windowsJob, `${files(entry).exit}.launch`);
+    return;
+  }
   try {
     if (entry.pid) process.kill(-entry.pid, name);
   } catch {}
 }
 
 function groupAlive(entry: Entry) {
+  if (process.platform === "win32") return alive(entry);
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
   return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
     .trim()
@@ -160,7 +168,7 @@ export function createWorker({
   let unreachableSince: number | null = null;
   let told = false;
   let tries = 0;
-  mkdirSync(RUNS, { recursive: true, mode: 0o700 });
+  privateDirectory(RUNS);
 
   const entries = () =>
     readdirSync(RUNS).flatMap((id) => {
@@ -179,9 +187,10 @@ export function createWorker({
     delete entry.pid;
     delete entry.stopping;
     delete entry.why;
+    if (process.platform === "win32") entry.windowsJob = `Local\\agent-autoloop-${randomUUID()}`;
     save(entry);
     const { rule, agent } = entry.job;
-    const cwd = rule.cwd.replace(/^~(?=\/)/, homedir());
+    const cwd = rule.cwd.replace(process.platform === "win32" ? /^~(?=[/\\])/ : /^~(?=\/)/, homedir());
     const turn: Turn = {
       prompt,
       session: entry.session,
@@ -212,12 +221,15 @@ export function createWorker({
     ].join("\n");
     // The login shell gives it the PATH and sign-in its owner has in a terminal; launchd and systemd give neither.
     const login = [process.env.SHELL ?? "/bin/sh", "-lc", 'exec "$0" "$@"'];
-    const child = spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login, ...argv], {
-      cwd,
-      env: agentEnvironment(entry),
-      detached: true,
-      stdio: "ignore",
-    });
+    const child =
+      process.platform === "win32"
+        ? launchWindows(entry.windowsJob!, argv, cwd, agentEnvironment(entry), { out, err, exit }, log)
+        : spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login, ...argv], {
+            cwd,
+            env: agentEnvironment(entry),
+            detached: true,
+            stdio: "ignore",
+          });
     child.on("error", (error) => log(`run ${entry.run}: ${error}`));
     child.unref();
     entry.pid = child.pid;
@@ -232,7 +244,7 @@ export function createWorker({
 
   async function start(job: Job) {
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privateDirectory(dir);
     const entry: Entry = {
       run: job.run,
       token: job.token,
@@ -249,7 +261,7 @@ export function createWorker({
     // Kept before anything slow: a worker stopped from here on still has the job.
     save(entry);
     try {
-      writeFileSync(path.join(dir, "context.json"), JSON.stringify(job.context, null, 2), { mode: 0o600 });
+      writePrivateFile(path.join(dir, "context.json"), JSON.stringify(job.context, null, 2));
       const adapter = await adapterFor(job.agent.use);
       entry.prompt = promptFor(job, path.join(dir, "context.json"));
       save(entry);
@@ -343,9 +355,7 @@ export function createWorker({
       // The worker stopped while starting it, before anything was launched.
       if (!entry.prompt) entry.prompt = promptFor(entry.job, path.join(entry.dir, "context.json"));
       try {
-        writeFileSync(path.join(entry.dir, "context.json"), JSON.stringify(entry.job.context, null, 2), {
-          mode: 0o600,
-        });
+        writePrivateFile(path.join(entry.dir, "context.json"), JSON.stringify(entry.job.context, null, 2));
         return launch(entry, adapter, entry.prompt);
       } catch (error) {
         return endWith(entry, { outcome: "failed", error: String((error as Error).message ?? error).slice(0, 500) });
@@ -354,7 +364,7 @@ export function createWorker({
     const { exit } = files(entry);
     if (entry.stopping !== undefined) {
       if (groupAlive(entry)) {
-        if (now() - entry.stopping > STOP_GRACE) signal(entry, "SIGKILL");
+        if (process.platform === "win32" || now() - entry.stopping > STOP_GRACE) signal(entry, "SIGKILL");
         return;
       }
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);

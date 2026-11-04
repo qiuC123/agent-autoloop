@@ -56,12 +56,11 @@ test("release scope compares the entire healthy-live range and both sides of ren
 test("executable or symlink documents and unknown history always need release", () => {
   for (const mode of ["executable", "symlink"]) {
     git("reset", "--hard", base);
-    if (mode === "executable") chmodSync(join(root, "docs/a.md"), 0o755);
-    else {
-      rmSync(join(root, "docs/a.md"));
-      symlinkSync("../app.ts", join(root, "docs/a.md"));
-    }
-    assert.equal(releaseRequired(root, base, commit(), config.internal), true);
+    git("config", "core.autocrlf", "false");
+    if (mode === "executable") git("update-index", "--chmod=+x", "docs/a.md");
+    else git("update-index", "--cacheinfo", `120000,${git("hash-object", "-w", "app.ts")},docs/a.md`);
+    git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "mode");
+    assert.equal(releaseRequired(root, base, git("rev-parse", "HEAD"), config.internal), true);
   }
   assert.equal(releaseRequired(root, "0".repeat(40), base, config.internal), true);
   git("reset", "--hard", base);

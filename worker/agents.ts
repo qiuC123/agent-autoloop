@@ -53,14 +53,31 @@ export function findProgram(name: string, elsewhere: () => string[] = () => []) 
     const shell = process.env.SHELL ?? "/bin/sh";
     let onPath: string | null = null;
     try {
-      const printed = execFileSync(shell, ["-lc", `command -v ${name}`], {
-        encoding: "utf8",
-        timeout: 15_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      onPath = printed.trim().split("\n").at(-1) || null;
+      const printed = execFileSync(
+        process.platform === "win32" ? "where.exe" : shell,
+        process.platform === "win32" ? [`${name}.exe`] : ["-lc", `command -v ${name}`],
+        {
+          encoding: "utf8",
+          timeout: 15_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
+      onPath =
+        printed
+          .trim()
+          .split(/\r?\n/)
+          .at(process.platform === "win32" ? 0 : -1) || null;
     } catch {}
-    found.set(name, onPath ?? elsewhere().find(existsSync) ?? null);
+    onPath ??= elsewhere().find(existsSync) ?? null;
+    if (!onPath && process.platform === "win32") {
+      try {
+        onPath =
+          execFileSync("where.exe", [name], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] })
+            .trim()
+            .split(/\r?\n/)[0] || null;
+      } catch {}
+    }
+    found.set(name, onPath);
   }
   const program = found.get(name);
   if (!program) throw new Error(`找不到 ${name}：先装好并登录`);

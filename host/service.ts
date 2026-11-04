@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "./home.ts";
+import { controlUp } from "./windows-control.ts";
+import { windowsService } from "./windows-service.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
@@ -60,6 +62,11 @@ const launchdHasIt = () =>
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 export function installService() {
+  if (process.platform === "win32") {
+    stopUp();
+    windowsService({ home: HOME }).install();
+    return;
+  }
   mkdirSync(path.join(HOME, "logs"), { recursive: true, mode: 0o700 });
   if (process.platform === "darwin") {
     mkdirSync(path.dirname(plistFile()), { recursive: true });
@@ -78,6 +85,11 @@ export function installService() {
 }
 
 export function removeService() {
+  if (process.platform === "win32") {
+    windowsService({ home: HOME }).remove();
+    stopUp();
+    return;
+  }
   const file = process.platform === "darwin" ? plistFile() : unitFile();
   if (!existsSync(file) || !readFileSync(file, "utf8").includes(xml(PROGRAM))) return;
   if (process.platform === "darwin") {
@@ -91,6 +103,7 @@ export function removeService() {
 
 /** The process that left its number in up.pid, if it still is that process: the number may be someone else's by now. */
 export function runningUp() {
+  if (process.platform === "win32") return controlUp(HOME, "status");
   const file = path.join(HOME, "up.pid");
   if (!existsSync(file)) return null;
   const pid = readFileSync(file, "utf8").trim();
@@ -106,6 +119,11 @@ export function runningUp() {
 
 /** Stopping a service returns before its process is gone, and one started by hand has no service to stop it. */
 export function stopUp() {
+  if (process.platform === "win32") {
+    if (controlUp(HOME, "stop") === null) return;
+    for (let tries = 0; tries < 50 && runningUp() !== null; tries++) pause(100);
+    return;
+  }
   const pid = runningUp();
   if (pid === null) return;
   try {
@@ -115,6 +133,7 @@ export function stopUp() {
 }
 
 export function serviceRunning() {
+  if (process.platform === "win32") return windowsService({ home: HOME }).installed() && runningUp() !== null;
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
 }

@@ -3,23 +3,42 @@
 //   "channels": { "desktop": { "key": "…" } } in config.json
 //   "channels": { "desktop": { "name": "桌面通知" } } in rules.json
 import { execFile, spawnSync } from "node:child_process";
+import { join } from "node:path";
 import type { Card, ChannelContext } from "../../host/channels.ts";
+import { command } from "../../host/command.ts";
 
 const WORDS = "运行 agent-autoloop status 查看";
 const TITLE = "Agent 问你一个问题";
 const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"];
 
 /**
- * A card's title is whatever an Agent wrote, so it's only ever an argument, never part of a script. The `--` is what keeps
- * it one when it starts with a dash: without it osascript takes a title of `-e` as more script to run.
+ * Card text is data: `--` protects Unix arguments; base64 arguments keep Windows text out of PowerShell syntax.
  */
 export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
+  if (title.includes("\0")) throw new TypeError("通知标题不能包含空字符");
   const body = `${title}\n${WORDS}`;
   if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
+  if (platform === "win32")
+    return [
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-STA",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        join(import.meta.dirname, "notify.ps1"),
+        Buffer.from(TITLE).toString("base64"),
+        Buffer.from(body).toString("base64"),
+      ],
+    ];
   return ["notify-send", ["--", TITLE, body]];
 }
 
 function hasDesktop() {
+  if (process.platform === "win32") return process.env.SESSIONNAME !== "Services";
   if (process.platform === "darwin") {
     return spawnSync("launchctl", ["print", `gui/${process.getuid!()}`], { stdio: "ignore" }).status === 0;
   }
@@ -29,8 +48,9 @@ function hasDesktop() {
 /** Not the sync call the other channels get away with: this runs in the hub's own process, and may wait on a dialog. */
 function show(title: string) {
   const [program, args] = notifyCommand(title);
+  const [executable, ...argv] = command(program, args);
   return new Promise<void>((resolve, reject) => {
-    execFile(program, args, { timeout: 30_000 }, (error) => (error ? reject(error) : resolve()));
+    execFile(executable, argv, { timeout: 30_000, windowsHide: true }, (error) => (error ? reject(error) : resolve()));
   });
 }
 

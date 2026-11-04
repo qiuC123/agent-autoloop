@@ -14,17 +14,29 @@
 
 **Agent Autoloop** 是一个极轻量的自动化中台。它把任务调度做成一个零外部依赖的**内核**，把事件来源、Agent、通知通道，甚至代码上线流水线全部拆成可随时插拔的**插件**。
 
-- **一台电脑、一条命令就能跑。** 装在你的 Mac 或 Linux 上，不用买云服务器，也不用开放公网端口。
+- **一台电脑、一条命令就能跑。** 装在你的 Mac、Linux 或 Windows 上，不用买云服务器，也不用开放公网端口。
 - **一行配置接新 Agent。** 不需要 SDK，也不需要改 Agent 源码，能接收提示词并打印最后一条回复的命令行工具都能接。
 - **没有后台界面。** 需要你拍板时把卡片推到飞书、钉钉、企微、Slack、Discord 或桌面通知；想看全局进展，敲一行命令。
 
 ## 上手
 
-支持 macOS 和 Linux。运行前需要装好 Node 24、Git、curl，以及任意一个你已经登录好的命令行 Agent，不需要 GitHub 账号。也可以直接把[安装说明](INSTALL.md)丢给你的 Agent，让它替你装好。
+支持 macOS、Linux 和 Windows 10/11。运行前需要装好 Node 24、Git，以及任意一个你已经登录好的命令行 Agent，不需要 GitHub 账号。也可以直接把[安装说明](INSTALL.md)丢给你的 Agent，让它替你装好。
+
+macOS / Linux（另需 curl）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+Windows（PowerShell 5.1 或更新）：
+
+```powershell
+irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
+```
+
+Windows 数据目录只授权当前用户。使用独立账号的 Agent 沙箱（如 Codex 的 Windows `elevated` 模式）可能读不到本轮资料；引擎不会修改沙箱或自动放宽为 `full`。先核实 Agent 对资料文件的读取，`full` 只能由本人在可信规则中明确选择。
+
+Windows 用当前用户登录时启动的计划任务常驻，不需要管理员权限；日志在 `~/.agent-autoloop/logs/up.log`。安装时保留终端的 PATH 和 Agent 配置目录，沿用本人登录；修改它们后重新运行 `agent-autoloop service install`。用 `--no-service` 安装时，在终端运行 `agent-autoloop up`。`agent-autoloop service status` 查看常驻状态，`service stop` 停止中台并保留下次登录启动，`service remove` 停止并移除计划任务。停止单轮用 `agent-autoloop stop <轮次>`，它会停掉整棵 Agent 进程树。Shell 示例需在对应的 shell 中运行，Windows 原生命令脚本用明确的 `node.exe` / `.exe` 和参数。
 
 装好后用你本机的 Agent 真实走一遍“提问 → 退出等回复 → 拍板 → 接着干完”：
 
@@ -238,8 +250,8 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 | `skills/agent-autoloop/` | 中台的正式配置与操作手册，安装时也提供给 Agent 使用 |
 | `docs/` | 通信协议、插件开发说明与中英文架构图 |
 | `tests/`、`sim/` | 日常行为测试，以及模拟、穷举、强杀和变异检查 |
-| `scripts/`、`.github/workflows/` | 性能与真机验证、安装冒烟脚本，以及 Linux / macOS CI |
-| 根目录文档与 `install.sh` | 中英文 README、安装说明、安全边界、开发约定、许可证与安装脚本 |
+| `scripts/`、`.github/workflows/` | 性能与真机验证、安装冒烟脚本，以及 Linux / macOS / Windows CI |
+| 根目录文档与 `install.sh`、`install.ps1` | 中英文 README、安装说明、安全边界、开发约定、许可证与安装脚本 |
 
 读代码可以从 `bin/agent-autoloop.ts` → `cli/main.ts` 开始，再按功能进入 `host/`、`worker/` 或 `plugins/`；内核设计先看[协议](docs/protocol.md)。同名文件分属不同层：`host/http.ts` 转换 Node 请求，`kernel/http.ts` 定义接口行为；`protocol/rules.ts` 校验输入，`kernel/rules.ts` 定义规则类型和匹配。
 

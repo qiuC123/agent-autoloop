@@ -6,7 +6,9 @@ import path from "node:path";
 import { loadChannel } from "./channels.ts";
 import { readConfig, type ChannelConfig } from "./config.ts";
 import { HOME } from "./home.ts";
+import { privateDirectory } from "./private.ts";
 import { runningUp } from "./service.ts";
+import { listenForControl } from "./windows-control.ts";
 import { commitOf } from "./version.ts";
 import { hubClient } from "../protocol/client.ts";
 import { createWorker } from "../worker/worker.ts";
@@ -53,11 +55,18 @@ async function keepChannelRunning(
 
 export async function up() {
   const config = readConfig();
-  mkdirSync(HOME, { recursive: true, mode: 0o700 });
-  const unlock = lock();
+  privateDirectory(HOME);
   const stop = new AbortController();
   const jobs: Promise<unknown>[] = [];
   let close = () => {};
+  let unlock = () => {};
+  const finish = () => {
+    stop.abort();
+    close();
+    unlock();
+    process.exit(0);
+  };
+  unlock = process.platform === "win32" ? await listenForControl(HOME, finish) : lock();
   if (config.hub) {
     loadSecrets();
     const [host, port] = config.hub.listen.split(":");
@@ -83,12 +92,6 @@ export async function up() {
   for (const [id, channel] of Object.entries(config.channels ?? {})) {
     jobs.push(keepChannelRunning(id, channel, config.url, stop.signal));
   }
-  const finish = () => {
-    stop.abort();
-    close();
-    unlock();
-    process.exit(0);
-  };
   process.on("SIGTERM", finish);
   process.on("SIGINT", finish);
   await Promise.all(jobs);

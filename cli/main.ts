@@ -8,9 +8,10 @@ import { createInterface } from "node:readline/promises";
 import { hubClient } from "../protocol/client.ts";
 import { CONFIG_FILE, readConfig, writeConfig, type Config } from "../host/config.ts";
 import { HOME, RULES_FILE } from "../host/home.ts";
-import { installService, removeService, serviceRunning } from "../host/service.ts";
+import { installService, removeService, serviceRunning, stopUp } from "../host/service.ts";
 import { versionLine } from "../host/version.ts";
 import { spendLine } from "./spend.ts";
+import { privateDirectory } from "../host/private.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const PROGRAM = path.join(ROOT, "bin", "agent-autoloop.ts");
@@ -46,7 +47,7 @@ const HELP = `Agent 自动化中台
   agent-autoloop uninstall [--yes]       卸载程序并保留数据；--yes 跳过确认
   agent-autoloop --version               版本和当前提交
   agent-autoloop up                      启动（平时由系统服务调用）
-  agent-autoloop service install|remove  系统服务
+  agent-autoloop service install|remove  系统服务（Windows 另有 stop|status）
 
 配置和数据在 ${HOME}。规则在 ${RULES_FILE}，改了自动生效。`;
 
@@ -107,13 +108,15 @@ function linkSkill() {
     const link = path.join(homedir(), agent, "skills", "agent-autoloop");
     if (lstatSync(link, { throwIfNoEntry: false })) continue;
     mkdirSync(path.dirname(link), { recursive: true });
-    symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link);
+    symlinkSync(path.join(ROOT, "skills", "agent-autoloop"), link, process.platform === "win32" ? "junction" : "dir");
   }
 }
 
 /** What to type to run this program: its name if that's what a shell finds, otherwise where it is. */
 function howToRun() {
-  const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout.trim();
+  if (process.platform === "win32")
+    return `& '${process.execPath.replaceAll("'", "''")}' '${PROGRAM.replaceAll("'", "''")}'`;
+  const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout?.trim();
   if (found && realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
   return /\s/.test(PROGRAM) ? `'${PROGRAM}'` : PROGRAM;
 }
@@ -152,7 +155,7 @@ async function agentsToUse(named: Flags, worker: string) {
 async function init(args: string[]) {
   const { named } = flags(args);
   if (existsSync(CONFIG_FILE)) return fail(`已经装过了：${CONFIG_FILE}`);
-  mkdirSync(HOME, { recursive: true, mode: 0o700 });
+  privateDirectory(HOME);
   mkdirSync(path.join(HOME, "try"), { recursive: true });
   const hostName = hostname()
     .toLowerCase()
@@ -494,7 +497,17 @@ async function stop(args: string[]) {
 function service(args: string[]) {
   if (args[0] === "install") return installService();
   if (args[0] === "remove") return removeService();
-  fail("用法：agent-autoloop service install|remove");
+  if (process.platform === "win32" && args[0] === "stop") {
+    stopUp();
+    return console.log("中台已停止，登录启动任务保留。");
+  }
+  if (process.platform === "win32" && args[0] === "status")
+    return console.log(serviceRunning() ? "后台中台正在运行。" : "后台中台没有运行。");
+  fail(
+    process.platform === "win32"
+      ? "用法：agent-autoloop service install|remove|stop|status"
+      : "用法：agent-autoloop service install|remove",
+  );
 }
 
 /** A plugin is a folder of its own under this install, named after its repository. */
@@ -502,7 +515,7 @@ function addPlugin(args: string[]) {
   const url = args[0] ?? fail("用法：agent-autoloop add <git 地址>");
   const name = url
     .replace(/\/$/, "")
-    .split(/[/:]/)
+    .split(/[\\/:]/)
     .at(-1)!
     .replace(/\.git$/, "")
     .toLowerCase();

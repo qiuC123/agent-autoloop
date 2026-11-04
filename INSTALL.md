@@ -4,15 +4,23 @@
 
 ## 安装
 
-支持 macOS、Linux，暂不支持 Windows。需要 Node.js 24 或更新、Git、curl，以及一个已经登录的命令行 Agent。
+支持 macOS、Linux、Windows 10/11。需要 Node.js 24 或更新、Git，以及一个已经登录的命令行 Agent。macOS / Linux 另需 curl，Windows 需要系统自带的 Windows PowerShell 5.1 和 .NET Framework 4.x 编译器。
 
 先检查 `node --version`。Homebrew 的 `node@24` 默认不进 PATH，装好后还要运行 `export PATH="$(brew --prefix node@24)/bin:$PATH"`；需要长期生效时再写入用户的 shell 配置。不要替用户登录，也不要读取或复制登录凭据。
 
-本仓库已公开，安装脚本和代码都可匿名下载，不需要 GitHub 账号、登录或 GitHub CLI（`gh`）。下面的命令安装并启用登录后常驻服务：
+本仓库已公开，安装脚本和代码都可匿名下载，不需要 GitHub 账号、登录或 GitHub CLI（`gh`）。下面的命令安装并启用登录后常驻服务。macOS / Linux：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
+```
+
+Windows 常驻用当前用户的登录计划任务，使用交互登录令牌，不保存密码、不提权；任务名按数据目录区分，只跑一个实例，失败一分钟后重启。日志在数据目录的 `logs/up.log`。服务保留安装终端的 PATH 和 `HOME`、`USERPROFILE`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME` 中已有的目录设置；没有复制 Agent 凭据。修改这些目录或 PATH 后重新运行 `agent-autoloop service install`。
 
 GitHub Issue 轮询和 PR 交付等功能另需已登录的 `gh`，按对应场景说明配置；运行 Agent 也仍需该 Agent 自己的登录或授权。
 
@@ -24,11 +32,18 @@ GitHub Issue 轮询和 PR 交付等功能另需已登录的 `gh`，按对应场�
 AGENT_AUTOLOOP_REPO=/path/to/agent-autoloop sh /path/to/agent-autoloop/install.sh --agent codex
 ```
 
+Windows 对应写法（从该仓库运行；只在当前 PowerShell 进程加载脚本）：
+
+```powershell
+$env:AGENT_AUTOLOOP_REPO = 'C:/code/agent-autoloop'
+& ([scriptblock]::Create((Get-Content -Raw -Encoding UTF8 'C:/code/agent-autoloop/install.ps1'))) --agent codex
+```
+
 `--agent claude` 选择 Claude Code；只有其他 CLI 时加 `--command 'hermes chat -q {prompt}'`。不指定时会检测本机安装的 Agent，第一种作为试跑对象。
 
-程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；没有位置时使用安装器打印的完整路径。
+程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`（Windows 的 `~` 是 `USERPROFILE`）。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；Windows 生成 `.cmd` 入口，不修改系统 PATH，没有位置时使用安装器打印的完整路径。
 
-安装器和中台启动时都会把数据目录设为 `0700`，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
+安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，阻止其他系统用户读取数据库、事件和运行输出。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 
@@ -43,6 +58,16 @@ port=$(node -e 'const s=require("node:net").createServer().listen(0,"127.0.0.1",
 AGENT_AUTOLOOP_REPO=/path/to/agent-autoloop sh /path/to/agent-autoloop/install.sh --agent codex --no-service --port "$port"
 agent-autoloop up
 ```
+
+Windows 临时环境不必运行安装器，直接用源码入口，不创建计划任务或改 Agent 配置：
+
+```powershell
+$env:AGENT_AUTOLOOP_HOME = 'C:/temp/agent-autoloop-home'
+node C:/code/agent-autoloop/bin/agent-autoloop.ts init --agent codex --no-service --port 3351
+node C:/code/agent-autoloop/bin/agent-autoloop.ts up
+```
+
+测试假扮用户时同时设置临时 `HOME` 和 `USERPROFILE`；只隔离引擎资料、沿用本机 Agent 登录时只设置 `AGENT_AUTOLOOP_HOME`。Windows 的 `cwd` 可用盘符绝对路径、UNC、`~/` 和 `~\`；拒绝 `C:relative` 这类盘符相对路径。脚本 Agent 显式写 `node.exe` 和脚本路径，不依赖 shebang。`service status` 查看后台状态，`service stop` 通过私有控制口停止中台并保留计划任务（下次登录启动），`service remove` 再删除自己的任务。在跑的 Agent 保留给重启后的接单程序认领；要停止任务本身用 `stop <轮次>`。
 
 `up` 会一直运行。在 Agent 的命令工具里保留它返回的运行中会话，再用另一条命令完成验证；不要用 `nohup … &` 代替，命令工具可能在退出时清理后台进程。看到监听地址后再运行验证命令；启动失败就先处理该会话里的错误。
 
@@ -93,4 +118,6 @@ agent-autoloop uninstall
 - [插件](docs/plugins.md)：三个可运行的最小例子。
 - [安全边界](SECURITY.md)：密钥、执行权限和交付审查。
 
-开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db` 和 `master.key`；后者权限应为 0600。
+开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
+
+Windows 数据文件只授权当前用户。Codex `elevated` 等独立账号沙箱可能读不到 `context.json`；请先在 Agent 自己的环境里核实，安装器不会更改沙箱或自动改用 `full`。

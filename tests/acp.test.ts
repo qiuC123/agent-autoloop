@@ -68,12 +68,13 @@ test("ACP chooses only a one-time permission and respects structured kinds and r
   assert.equal(ask("read", { kind: "execute", title: "read file" }).optionId, "no");
   assert.equal(ask("edit", { kind: "edit", locations: [{ path: join(home, "new.txt") }] }).optionId, "once");
   mkdirSync(join(home, "work"));
-  symlinkSync(tmpdir(), join(home, "work", "escape"));
+  symlinkSync(tmpdir(), join(home, "work", "escape"), process.platform === "win32" ? "junction" : "dir");
   assert.equal(
     ask("edit", { kind: "edit", locations: [{ path: join(home, "work", "escape", "outside") }] }).optionId,
     "no",
   );
   assert.equal(ask("edit", { kind: "other" }).optionId, "no");
+  assert.equal(ask("edit", { kind: "edit", locations: [{ path: join(home, "..", "outside.txt") }] }).optionId, "no");
   assert.equal(ask("full", { kind: "other" }).optionId, "once");
 });
 test("ACP refuses incompatible versions and premature process exit", async () => {

@@ -1,4 +1,4 @@
-// The worker turns jobs into agents and what they say into results. Real processes run here (small shell scripts), because
+// The worker turns jobs into agents and what they say into results. Real processes run here (small Node scripts), because
 // what matters is what happens across their lives. Failure cases: a job starts anywhere but its rule's folder, or without
 // the prompt and the context file, or with the hub's secrets in its environment; a bad exit code or no last message counts
 // as work done; a finished run's result is lost when the hub can't be reached just then, sent again after the hub took it,
@@ -34,7 +34,7 @@ writeFileSync(
   join(home, "plugins", "scripted", "agent.ts"),
   `
 export default {
-  command: (t) => ["/bin/sh", "-c", t.command[0], "scripted", t.resume ?? "", t.prompt],
+  command: (t) => [process.execPath, "-e", t.command[0], t.resume ?? "", t.prompt],
   read(stdout, code, stderr) {
     const session = /session=(\\S+)/.exec(stdout)?.[1];
     const finished = stdout.includes("TURN-OVER");
@@ -47,6 +47,7 @@ export default {
 );
 
 let nextRun = 1;
+const node = (source: string, ...args: string[]) => [process.execPath, "-e", source, ...args];
 const job = (
   over: { use?: string; command?: string[]; session?: string | null; timeout?: number; cwd?: string } = {},
 ) => ({
@@ -61,7 +62,7 @@ const job = (
     name: "甲",
     use: over.use ?? "command",
     access: "edit",
-    command: over.command ?? ["/bin/sh", "-c", "echo 好了"],
+    command: over.command ?? node("console.log('好了')"),
     timeout: over.timeout,
   },
   context: {
@@ -134,8 +135,10 @@ const worker = (hub: ReturnType<typeof fakeHub>, more: object = {}) =>
 
 test("a job runs in its rule's folder with the prompt and context file, and without the hub's secrets", async () => {
   const hub = fakeHub();
-  const script = `pwd > out.txt; printenv AGENT_AUTOLOOP_CONTEXT >> out.txt; printenv AGENT_AUTOLOOP_SECRET_X >> out.txt; printenv AGENT_AUTOLOOP_RUN >> out.txt; echo "$PROMPT_ARG" >> out.txt; cat "$AGENT_AUTOLOOP_CONTEXT" > ctx.txt; echo 改好了`;
-  const given = job({ command: ["/bin/sh", "-c", `PROMPT_ARG="$1"; ${script}`, "sh", "{prompt}"] });
+  const script = `const fs = require('node:fs'); fs.writeFileSync('out.txt', [process.cwd(), process.env.AGENT_AUTOLOOP_CONTEXT,
+    process.env.AGENT_AUTOLOOP_SECRET_X ?? '', process.env.AGENT_AUTOLOOP_RUN, process.argv[1]].join('\\n'));
+    fs.copyFileSync(process.env.AGENT_AUTOLOOP_CONTEXT, 'ctx.txt'); console.log('改好了');`;
+  const given = job({ command: node(script, "{prompt}") });
   hub.jobs.push(given);
   const w = worker(hub);
   await until(w, () => hub.results.length === 1);
@@ -152,10 +155,7 @@ test("a job runs in its rule's folder with the prompt and context file, and with
 
 test("a bad exit code, or no last message, is a failure saying why", async () => {
   const hub = fakeHub();
-  hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "echo boom >&2; exit 3"] }),
-    job({ command: ["/bin/sh", "-c", "true"] }),
-  );
+  hub.jobs.push(job({ command: node("console.error('boom'); process.exit(3)") }), job({ command: node("") }));
   const w = worker(hub);
   await until(w, () => hub.results.length === 2);
   assert.equal(hub.results[0].outcome, "failed");
@@ -166,8 +166,8 @@ test("a bad exit code, or no last message, is a failure saying why", async () =>
 test("a last message saying it couldn't, or that there was nothing to do, is what it says", async () => {
   const hub = fakeHub();
   hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "echo 没跑成：连不上数据库"] }),
-    job({ command: ["/bin/sh", "-c", "echo 没事可做：已经恢复了"] }),
+    job({ command: node("console.log('没跑成：连不上数据库')") }),
+    job({ command: node("console.log('没事可做：已经恢复了')") }),
   );
   const w = worker(hub);
   await until(w, () => hub.results.length === 2);
@@ -195,7 +195,7 @@ test("a result waits for the hub and goes once; one it refuses is dropped, and s
 
 test("a run still going after the worker restarts stays, and its result still comes", async () => {
   const hub = fakeHub();
-  hub.jobs.push(job({ command: ["/bin/sh", "-c", "sleep 1; echo 慢慢做完了"] }));
+  hub.jobs.push(job({ command: node("setTimeout(() => console.log('慢慢做完了'), 1000)") }));
   await worker(hub).tick();
   // A new worker, as after a restart: it has nothing in memory.
   const again = worker(hub);
@@ -206,59 +206,67 @@ test("a run still going after the worker restarts stays, and its result still co
   assert.equal(hub.results[0].summary, "慢慢做完了");
 });
 
-test("an exit file written during the process check still delivers the finished result", async () => {
-  const hub = fakeHub();
-  const w = worker(hub);
-  const given = job();
-  const dir = join(home, "worker", "runs", `${given.run}-1`);
-  const bin = join(home, "race-bin");
-  mkdirSync(dir, { recursive: true });
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(
-    join(dir, "entry.json"),
-    JSON.stringify({
-      run: given.run,
-      token: given.token,
-      attempt: 1,
-      job: given,
-      dir,
-      prompt: "",
-      turn: 1,
-      session: "x",
-      resume: null,
-      repairs: 0,
-      triedFresh: false,
-      pid: 999999,
-    }),
-  );
-  writeFileSync(join(dir, "stdout-1.log"), "在进程检查时做完了\n");
-  writeFileSync(join(bin, "ps"), `#!/bin/sh\nprintf 0 > '${join(dir, "exit-1")}'\n`, { mode: 0o755 });
-  const previous = process.env.PATH;
-  process.env.PATH = `${bin}:${previous}`;
-  try {
-    await w.tick();
-    assert.equal(hub.results[0].summary, "在进程检查时做完了");
-  } finally {
-    process.env.PATH = previous;
-  }
-});
-
-test("the wrapper keeps its identity until the exit file is published", async () => {
-  const bin = join(home, "slow-publish-bin");
-  mkdirSync(bin);
-  writeFileSync(join(bin, "mv"), '#!/bin/sh\nsleep 0.2\nexec /bin/mv "$@"\n', { mode: 0o755 });
-  const previous = process.env.PATH;
-  process.env.PATH = `${bin}:${previous}`;
-  try {
+test(
+  "an exit file written during the process check still delivers the finished result",
+  { skip: process.platform === "win32" },
+  async () => {
     const hub = fakeHub();
-    hub.jobs.push(job({ command: ["echo", "发布后结束"] }));
-    await until(worker(hub), () => hub.results.length === 1);
-    assert.equal(hub.results[0].outcome, "done", JSON.stringify(hub.results[0]));
-    assert.equal(hub.results[0].summary, "发布后结束");
-  } finally {
-    process.env.PATH = previous;
-  }
-});
+    const w = worker(hub);
+    const given = job();
+    const dir = join(home, "worker", "runs", `${given.run}-1`);
+    const bin = join(home, "race-bin");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      join(dir, "entry.json"),
+      JSON.stringify({
+        run: given.run,
+        token: given.token,
+        attempt: 1,
+        job: given,
+        dir,
+        prompt: "",
+        turn: 1,
+        session: "x",
+        resume: null,
+        repairs: 0,
+        triedFresh: false,
+        pid: 999999,
+      }),
+    );
+    writeFileSync(join(dir, "stdout-1.log"), "在进程检查时做完了\n");
+    writeFileSync(join(bin, "ps"), `#!/bin/sh\nprintf 0 > '${join(dir, "exit-1")}'\n`, { mode: 0o755 });
+    const previous = process.env.PATH;
+    process.env.PATH = `${bin}:${previous}`;
+    try {
+      await w.tick();
+      assert.equal(hub.results[0].summary, "在进程检查时做完了");
+    } finally {
+      process.env.PATH = previous;
+    }
+  },
+);
+
+test(
+  "the wrapper keeps its identity until the exit file is published",
+  { skip: process.platform === "win32" },
+  async () => {
+    const bin = join(home, "slow-publish-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "mv"), '#!/bin/sh\nsleep 0.2\nexec /bin/mv "$@"\n', { mode: 0o755 });
+    const previous = process.env.PATH;
+    process.env.PATH = `${bin}:${previous}`;
+    try {
+      const hub = fakeHub();
+      hub.jobs.push(job({ command: node("console.log('发布后结束')") }));
+      await until(worker(hub), () => hub.results.length === 1);
+      assert.equal(hub.results[0].outcome, "done", JSON.stringify(hub.results[0]));
+      assert.equal(hub.results[0].summary, "发布后结束");
+    } finally {
+      process.env.PATH = previous;
+    }
+  },
+);
 
 test("a job the worker stopped before launching is launched when it comes back", async () => {
   const hub = fakeHub();
@@ -299,7 +307,13 @@ test("a missing folder or an agent with no adapter comes back failed without lau
 test("a run told to stop stops, with its children, and only then is it reported", async () => {
   const hub = fakeHub();
   const marker = join(folder, "child-alive");
-  hub.jobs.push(job({ command: ["/bin/sh", "-c", `(sleep 30; touch ${marker}) & wait`] }));
+  hub.jobs.push(
+    job({
+      command: node(`require('node:child_process').spawn(process.execPath, ['-e',
+    ${JSON.stringify(`setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, ''), 30000)`)}], { stdio: 'ignore' });
+    setInterval(() => {}, 1000);`),
+    }),
+  );
   const w = worker(hub);
   await w.tick();
   await w.tick();
@@ -312,49 +326,53 @@ test("a run told to stop stops, with its children, and only then is it reported"
   assert.ok(!existsSync(marker));
 });
 
-test("cancellation waits for a child ignoring SIGTERM, including after worker restart", async () => {
-  const hub = fakeHub();
-  let clock = Date.now();
-  const ready = join(folder, "stubborn-ready");
-  const script = said(
-    "stubborn.cjs",
-    `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
-  );
-  hub.jobs.push(job({ command: [process.execPath, script] }));
-  const w = worker(hub, { now: () => clock });
-  await until(w, () => existsSync(ready));
-  const entry = w.entries()[0];
-  const child = readFileSync(ready, "utf8");
-  try {
-    hub.cancel = [entry.run];
-    await w.tick();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const again = worker(hub, { now: () => clock });
-    await again.tick();
-    assert.equal(hub.results.length, 0, "the wrapper exited, but its child has not");
-    clock += 11_000;
-    await until(again, () => hub.results.length === 1);
-    const live = execFileSync("ps", ["-ax", "-o", "pid=", "-o", "stat="], { encoding: "utf8" })
-      .trim()
-      .split("\n")
-      .some((line) => {
-        const [pid, state] = line.trim().split(/\s+/);
-        return pid === child && !state.startsWith("Z");
-      });
-    assert.equal(live, false);
-    assert.equal(hub.results[0].outcome, "cancelled");
-  } finally {
+test(
+  "cancellation waits for a child ignoring SIGTERM, including after worker restart",
+  { skip: process.platform === "win32" },
+  async () => {
+    const hub = fakeHub();
+    let clock = Date.now();
+    const ready = join(folder, "stubborn-ready");
+    const script = said(
+      "stubborn.cjs",
+      `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+    );
+    hub.jobs.push(job({ command: [process.execPath, script] }));
+    const w = worker(hub, { now: () => clock });
+    await until(w, () => existsSync(ready));
+    const entry = w.entries()[0];
+    const child = readFileSync(ready, "utf8");
     try {
-      process.kill(-entry.pid!, "SIGKILL");
-    } catch {}
-    rmSync(entry.dir, { recursive: true, force: true });
-  }
-});
+      hub.cancel = [entry.run];
+      await w.tick();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const again = worker(hub, { now: () => clock });
+      await again.tick();
+      assert.equal(hub.results.length, 0, "the wrapper exited, but its child has not");
+      clock += 11_000;
+      await until(again, () => hub.results.length === 1);
+      const live = execFileSync("ps", ["-ax", "-o", "pid=", "-o", "stat="], { encoding: "utf8" })
+        .trim()
+        .split("\n")
+        .some((line) => {
+          const [pid, state] = line.trim().split(/\s+/);
+          return pid === child && !state.startsWith("Z");
+        });
+      assert.equal(live, false);
+      assert.equal(hub.results[0].outcome, "cancelled");
+    } finally {
+      try {
+        process.kill(-entry.pid!, "SIGKILL");
+      } catch {}
+      rmSync(entry.dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a run over its time is stopped and comes back failed", async () => {
   const hub = fakeHub();
   let clock = Date.now();
-  hub.jobs.push(job({ command: ["/bin/sh", "-c", "sleep 30"], timeout: 5 }));
+  hub.jobs.push(job({ command: node("setTimeout(() => {}, 30000)"), timeout: 5 }));
   const w = worker(hub, { now: () => clock });
   await w.tick();
   clock += 6 * 60_000;
@@ -365,11 +383,12 @@ test("a run over its time is stopped and comes back failed", async () => {
 
 test("no more than capacity at once; a claim stays until its job has arrived", async () => {
   const hub = fakeHub();
-  hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "sleep 0.5; echo 一"] }),
-    job({ command: ["/bin/sh", "-c", "sleep 0.5; echo 二"] }),
-    job(),
-  );
+  const release = join(folder, "capacity-release");
+  const waiting = (text: string) =>
+    node(`const timer = setInterval(() => {
+    if (require('node:fs').existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log(${JSON.stringify(text)}); }
+  }, 20)`);
+  hub.jobs.push(job({ command: waiting("一") }), job({ command: waiting("二") }), job());
   const w = worker(hub, { capacity: 2 });
   await w.tick();
   const first = hub.claims[0].claim;
@@ -382,6 +401,7 @@ test("no more than capacity at once; a claim stays until its job has arrived", a
   await idle.tick();
   await idle.tick();
   assert.equal(empty.claims[0].claim, empty.claims[1].claim, "nothing arrived: the same claim again");
+  writeFileSync(release, "go");
   await until(w, () => hub.results.length === 3);
 });
 
@@ -401,10 +421,13 @@ test("a receipt that can't be read is asked for again in the same session, doing
     `session=s-1\n做完了\n\n${FENCE}agent-autoloop\n{"notice":[{"title":"看一眼","text":"这个"}]}\n${FENCE}\n`,
   );
   // Turn 1 does the work and gets the receipt wrong; turn 2 only rewrites it.
-  const script = `if [ -n "$1" ]; then cat "${right}"; echo "$2" > "${folder}/asked-again.txt"; exit 0; fi; echo did-it >> "${folder}/work.txt"; cat "${wrong}"`;
+  const script = `const fs = require('node:fs'); if (process.argv[1]) {
+    process.stdout.write(fs.readFileSync(${JSON.stringify(right)})); fs.writeFileSync('asked-again.txt', process.argv[2]);
+  } else { fs.appendFileSync('work.txt', 'did-it\\n'); process.stdout.write(fs.readFileSync(${JSON.stringify(wrong)})); }`;
   hub.jobs.push(job({ use: "scripted", command: [script] }));
   const w = worker(hub);
   await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "done", JSON.stringify(hub.results[0]));
   assert.equal(readFileSync(join(folder, "work.txt"), "utf8"), "did-it\n", "the work was done once");
   assert.match(readFileSync(join(folder, "asked-again.txt"), "utf8"), /不要重做/);
   assert.deepEqual(hub.results[0].notice, [{ title: "看一眼", text: "这个" }]);
@@ -423,19 +446,22 @@ for (const failure of ["exit", "timeout", "unreadable", "empty", "failed-message
     const marker = join(folder, `business-${failure}`);
     const repair =
       failure === "exit"
-        ? "echo repair-failed >&2; exit 1"
+        ? "console.error('repair-failed'); process.exit(1)"
         : failure === "timeout"
-          ? "sleep 30"
+          ? "setTimeout(() => {}, 30000)"
           : failure === "empty"
-            ? "true"
+            ? ""
             : failure === "failed-message"
-              ? "echo 没跑成：补回执失败"
-              : `printf 'session=original\\n没跑成：补回执失败\\n${FENCE}agent-autoloop\\n{ bad\\n${FENCE}\\n'`;
+              ? "console.log('没跑成：补回执失败')"
+              : `console.log(${JSON.stringify(`session=original\n没跑成：补回执失败\n${FENCE}agent-autoloop\n{ bad\n${FENCE}`)})`;
     hub.jobs.push(
       job({
         use: "scripted",
         timeout: 1,
-        command: [`if [ -n "$1" ]; then ${repair}; else echo once >> "${marker}"; cat "${wrong}"; fi`],
+        command: [
+          `if (process.argv[1]) { ${repair} } else { const fs = require('node:fs');
+          fs.appendFileSync(${JSON.stringify(marker)}, 'once\\n'); process.stdout.write(fs.readFileSync(${JSON.stringify(wrong)})); }`,
+        ],
       }),
     );
     const w = worker(hub, { now: () => clock });
@@ -456,7 +482,15 @@ for (const failure of ["exit", "timeout", "unreadable", "empty", "failed-message
 test("a receipt that stays unreadable is given up on: the run ends on its first line, and the owner hears", async () => {
   const hub = fakeHub();
   const wrong = said("always-wrong", `session=s-2\n做完了\n${FENCE}agent-autoloop\n{ 一直不对\n${FENCE}\n`);
-  hub.jobs.push(job({ use: "scripted", command: [`echo x >> "${folder}/tries.txt"; cat "${wrong}"`] }));
+  hub.jobs.push(
+    job({
+      use: "scripted",
+      command: [
+        `const fs = require('node:fs'); fs.appendFileSync('tries.txt', 'x\\n');
+    process.stdout.write(fs.readFileSync(${JSON.stringify(wrong)}));`,
+      ],
+    }),
+  );
   const w = worker(hub);
   await until(w, () => hub.results.length === 1);
   assert.equal(
@@ -470,7 +504,12 @@ test("a receipt that stays unreadable is given up on: the run ends on its first 
   // An agent with no session can't be asked: straight to giving up.
   const plain = fakeHub();
   plain.jobs.push(
-    job({ command: ["/bin/cat", said("plain-wrong", `好了\n${FENCE}agent-autoloop\n{ bad\n${FENCE}\n`)] }),
+    job({
+      command: node(
+        "process.stdout.write(require('node:fs').readFileSync(process.argv[1]))",
+        said("plain-wrong", `好了\n${FENCE}agent-autoloop\n{ bad\n${FENCE}\n`),
+      ),
+    }),
   );
   const p = worker(plain);
   await until(p, () => plain.results.length === 1);
@@ -479,7 +518,8 @@ test("a receipt that stays unreadable is given up on: the run ends on its first 
 
 test("a session that can't be gone on in starts a new one, once", async () => {
   const hub = fakeHub();
-  const script = `if [ -n "$1" ]; then echo "active writer" >&2; exit 1; fi; printf 'session=new\\n开了新会话也做完了\\n'`;
+  const script =
+    "if (process.argv[1]) { console.error('active writer'); process.exit(1); } console.log('session=new\\n开了新会话也做完了');";
   hub.jobs.push(job({ use: "scripted", command: [script], session: "old" }));
   const w = worker(hub);
   await until(w, () => hub.results.length === 1);
@@ -488,7 +528,7 @@ test("a session that can't be gone on in starts a new one, once", async () => {
     ["done", "开了新会话也做完了", "new"],
   );
   const failing = fakeHub();
-  failing.jobs.push(job({ use: "scripted", command: ["echo nope >&2; exit 1"], session: "old" }));
+  failing.jobs.push(job({ use: "scripted", command: ["console.error('nope'); process.exit(1)"], session: "old" }));
   const f = worker(failing);
   await until(f, () => failing.results.length === 1);
   assert.deepEqual([failing.results[0].outcome, failing.results[0].error], ["failed", "nope"]);
@@ -496,7 +536,9 @@ test("a session that can't be gone on in starts a new one, once", async () => {
 
 test("the session is told to the hub while it runs, with its link", async () => {
   const hub = fakeHub();
-  hub.jobs.push(job({ use: "scripted", command: ["printf 'session=s-9\\n'; sleep 0.5; printf '好了\\n'"] }));
+  hub.jobs.push(
+    job({ use: "scripted", command: ["console.log('session=s-9'); setTimeout(() => console.log('好了'), 500)"] }),
+  );
   const w = worker(hub);
   await until(w, () => hub.results.length === 1);
   assert.ok(hub.starts.some((s) => s.session === "s-9" && s.link === "app://s-9"));
@@ -505,7 +547,12 @@ test("the session is told to the hub while it runs, with its link", async () => 
 test("a turn that is over but doesn't exit is ended after a while, and its answer counts", async () => {
   const hub = fakeHub();
   let clock = Date.now();
-  hub.jobs.push(job({ use: "scripted", command: ["printf 'session=s-h\\nTURN-OVER\\n挂住之前说的\\n'; sleep 30"] }));
+  hub.jobs.push(
+    job({
+      use: "scripted",
+      command: ["console.log('session=s-h\\nTURN-OVER\\n挂住之前说的'); setTimeout(() => {}, 30000)"],
+    }),
+  );
   const w = worker(hub, { now: () => clock });
   await w.tick();
   for (let i = 0; i < 10 && !w.entries()[0]?.finishedAt; i++) {
@@ -525,7 +572,10 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   hub.down = true;
   let clock = Date.now();
   const told = join(folder, "told.txt");
-  const w = worker(hub, { now: () => clock, unreachable: ["/bin/sh", "-c", `echo "$0" >> ${told}`, "{text}"] });
+  const w = worker(hub, {
+    now: () => clock,
+    unreachable: node(`require('node:fs').appendFileSync(${JSON.stringify(told)}, process.argv[1] + '\\n')`, "{text}"),
+  });
   await w.tick();
   clock += 9 * 60_000;
   await w.tick();
@@ -547,7 +597,10 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   const failing = fakeHub();
   failing.down = true;
   const attempts = join(folder, "attempts.txt");
-  const f = worker(failing, { now: () => clock, unreachable: ["/bin/sh", "-c", `echo x >> ${attempts}; exit 1`] });
+  const f = worker(failing, {
+    now: () => clock,
+    unreachable: node(`require('node:fs').appendFileSync(${JSON.stringify(attempts)}, 'x\\n'); process.exit(1)`),
+  });
   await f.tick();
   clock += 11 * 60_000;
   for (let i = 0; i < 8; i++) await f.tick();

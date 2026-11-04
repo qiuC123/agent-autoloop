@@ -5,6 +5,7 @@
 //   "channels": { "feishu": { "name": "飞书", "answerers": ["ou_xxx"] } } in rules.json: who may answer.
 import { execFile, spawn } from "node:child_process";
 import readline from "node:readline";
+import { command } from "../../host/command.ts";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 
 function outcomeOf(card: Card) {
@@ -50,8 +51,12 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   const program = (options.lark as string | undefined) ?? "lark-cli";
   const lark = async (args: string[], input: string) => {
     const printed = await new Promise<string>((resolve, reject) => {
-      const child = execFile(program, args, { encoding: "utf8", timeout: 60_000, signal }, (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      const [executable, ...argv] = command(program, args);
+      const child = execFile(
+        executable,
+        argv,
+        { encoding: "utf8", timeout: 60_000, signal, windowsHide: true },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       );
       child.stdin!.on("error", reject);
       child.stdin!.end(input);
@@ -112,8 +117,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   async function listen() {
     while (!signal.aborted) {
       // stdin stays open: lark-cli ends an unbounded consume when its stdin closes.
-      const consume = spawn(program, ["event", "consume", "card.action.trigger", "--as", "bot"], {
+      const [executable, ...argv] = command(program, ["event", "consume", "card.action.trigger", "--as", "bot"]);
+      const consume = spawn(executable, argv, {
         stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
       });
       const stop = () => consume.kill();
       signal.addEventListener("abort", stop);

@@ -1,17 +1,36 @@
 // Codex: the user's own, installed and signed in by them. A run is a `codex exec` in the background; its thread is kept
 // on disk, so a retry or an answer can go on in it, and the link opens it in the app.
 import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { command } from "../../host/command.ts";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
 
 const SANDBOX = { read: "read-only", edit: "workspace-write", full: "danger-full-access" };
 const IN_THE_APP = [
   "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
   "/Applications/Codex.app/Contents/Resources/codex",
+  ...(process.platform === "win32"
+    ? (process.env.PATH ?? "").split(path.delimiter).flatMap((folder) => {
+        const vendor = path.join(
+          "vendor",
+          `${process.arch === "arm64" ? "aarch64" : "x86_64"}-pc-windows-msvc`,
+          "bin",
+          "codex.exe",
+        );
+        const packagePath = path.join(folder, "node_modules", "@openai", "codex");
+        return [
+          path.join(packagePath, "node_modules", "@openai", `codex-win32-${process.arch}`, vendor),
+          path.join(packagePath, vendor),
+        ];
+      })
+    : []),
 ];
+
+export const codexProgram = () => findProgram("codex", () => IN_THE_APP);
 
 export default {
   command: (turn) => [
-    findProgram("codex", () => IN_THE_APP),
+    ...command(codexProgram()),
     "exec",
     ...(turn.resume ? ["resume"] : []),
     "--json",
@@ -66,11 +85,8 @@ export default {
   link: (session) => `codex://threads/${session}`,
   check() {
     try {
-      execFileSync(
-        findProgram("codex", () => IN_THE_APP),
-        ["login", "status"],
-        { encoding: "utf8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] },
-      );
+      const [program, ...args] = command(codexProgram(), ["login", "status"]);
+      execFileSync(program, args, { encoding: "utf8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] });
       return null;
     } catch (error) {
       return `Codex 没有登录或用不了：运行 codex login（${(error as Error).message.split("\n")[0]}）`;

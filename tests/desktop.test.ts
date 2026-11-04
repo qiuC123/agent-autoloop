@@ -7,7 +7,7 @@
 // or that one reaches you when none does.
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,10 +27,19 @@ writeFileSync(rulesFile, JSON.stringify(rulesWith({ desktop: { name: "桌面通�
 const home = setup("desktop", rulesFile);
 const realPath = process.env.PATH;
 const realDisplay = process.env.DISPLAY;
+const realWayland = process.env.WAYLAND_DISPLAY;
+const realSession = process.env.SESSIONNAME;
 after(() => {
   process.env.PATH = realPath;
   if (realDisplay === undefined) delete process.env.DISPLAY;
   else process.env.DISPLAY = realDisplay;
+  for (const [name, value] of [
+    ["WAYLAND_DISPLAY", realWayland],
+    ["SESSIONNAME", realSession],
+  ]) {
+    if (value === undefined) delete process.env[name!];
+    else process.env[name!] = value;
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -64,19 +73,31 @@ function standIns(body = "") {
   const said = join(bin, "said");
   writeFileSync(join(bin, "launchctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   process.env.DISPLAY = ":99";
-  for (const name of ["osascript", "notify-send"]) {
-    const record = `{ for word in "$@"; do printf '%s\\036' "$word"; done; printf '\\035'; } >> "${said}"`;
-    writeFileSync(join(bin, name), `#!/bin/sh\n${record}\n${body}\n`);
-    chmodSync(join(bin, name), 0o755);
+  process.env.SESSIONNAME = "Console";
+  for (const name of ["osascript", "notify-send", "powershell.exe"]) {
+    writeFileSync(
+      join(bin, name),
+      `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(said)}, JSON.stringify(process.argv.slice(2)) + '\\n');\n${body}\n`,
+      { mode: 0o755 },
+    );
   }
   process.env.PATH = bin;
   return {
     calls: () =>
       existsSync(said)
         ? readFileSync(said, "utf8")
-            .split("\x1d")
-            .slice(0, -1)
-            .map((call) => call.split("\x1e").slice(0, -1))
+            .trim()
+            .split("\n")
+            .map((call) => JSON.parse(call) as string[])
+            .map((call) =>
+              process.platform === "win32"
+                ? [
+                    ...call.slice(0, -2),
+                    "--",
+                    ...call.slice(-2).map((word) => Buffer.from(word, "base64").toString("utf8")),
+                  ]
+                : call,
+            )
         : [],
   };
 }
@@ -115,7 +136,27 @@ test("it ships as a channel, and is told apart by platform", async () => {
   assert.equal(program, "osascript");
   assert.deepEqual(args.slice(args.indexOf("--")), ["--", TITLE, body("标题")]);
   assert.ok(args.includes("on run argv"));
+  const [windows, windowsArgs] = notifyCommand("$(Start-Process calc); <标题>", "win32");
+  assert.equal(windows, "powershell.exe");
+  assert.ok(windowsArgs.includes("-File"));
+  assert.equal(Buffer.from(windowsArgs.at(-2)!, "base64").toString("utf8"), TITLE);
+  assert.equal(Buffer.from(windowsArgs.at(-1)!, "base64").toString("utf8"), body("$(Start-Process calc); <标题>"));
 });
+
+test(
+  "the Windows notification script parses without displaying anything",
+  { skip: process.platform !== "win32" },
+  () => {
+    const file = Buffer.from(join(import.meta.dirname, "../plugins/desktop/notify.ps1")).toString("base64");
+    const script = `$tokens=$null; $errors=$null; $file=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${file}')); [void][System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$errors); if($errors.Count) { $errors | ForEach-Object { [Console]::Error.WriteLine($_) }; exit 1 }`;
+    const parsed = spawnSync(
+      join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe"),
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { encoding: "utf8", windowsHide: true },
+    );
+    assert.equal(parsed.status, 0, parsed.stderr);
+  },
+);
 
 test("a new card notifies once with its title; an update only reports", async () => {
   const fake = standIns();
@@ -176,6 +217,7 @@ test("without a graphical session it quietly skips notification and keeps consum
   process.env.PATH = join(dir, "nothing-here");
   delete process.env.DISPLAY;
   delete process.env.WAYLAND_DISPLAY;
+  process.env.SESSIONNAME = "Services";
   const { reports, logged } = await deliver([base, { ...base, id: 6 }]);
   assert.deepEqual(reports, [
     ["delivered", 5, 1, "skipped-5"],
@@ -185,7 +227,7 @@ test("without a graphical session it quietly skips notification and keeps consum
 });
 
 test("a notifier that fails is reported as not sent", async () => {
-  standIns("exit 1");
+  standIns("process.exit(1)");
   assert.deepEqual((await deliver([base])).reports, [["failed", 5, 1]]);
 });
 
@@ -203,7 +245,7 @@ test("a title no program can be given is reported, and takes nothing down", asyn
 });
 
 test("a slow notifier doesn't freeze the process the hub runs in", async () => {
-  standIns("/bin/sleep 0.3");
+  standIns("setTimeout(() => {}, 300)");
   let ticks = 0;
   const ticker = setInterval(() => ticks++, 10);
   await deliver([base]);
@@ -219,7 +261,13 @@ const program = (env: NodeJS.ProcessEnv, ...args: string[]) =>
     timeout: 30_000,
   });
 const installEnv = (place: string) => {
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: realPath, HOME: place, AGENT_AUTOLOOP_HOME: place };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: realPath,
+    HOME: place,
+    USERPROFILE: place,
+    AGENT_AUTOLOOP_HOME: place,
+  };
   delete env.AGENT_AUTOLOOP_RULES;
   delete env.AGENT_AUTOLOOP_PUBLIC_URL;
   return env;
@@ -285,6 +333,5 @@ test("doctor says what reaches you: only this computer, or nothing yet, or no wo
   } finally {
     server.closeAllConnections();
     server.close();
-    hub.db.close();
   }
 });

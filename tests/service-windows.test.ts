@@ -1,7 +1,7 @@
 // Prevents registering a machine-wide task, losing the terminal PATH, executing quoted paths as code, or removing another task.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -153,8 +153,10 @@ test("Windows task readback preserves Unicode paths and accepts standard XML ent
 });
 
 test("Windows task launcher preserves PATH and login directories, logs both streams and returns the engine status", () => {
+  const target = path.join(directory, "runner target 中文 & space");
+  mkdirSync(path.join(target, "logs"), { recursive: true });
   const home = path.join(directory, "runner 中文 & space");
-  mkdirSync(path.join(home, "logs"), { recursive: true });
+  symlinkSync(target, home, process.platform === "win32" ? "junction" : "dir");
   const program = path.join(home, "engine.mjs");
   writeFileSync(
     program,
@@ -180,6 +182,8 @@ test("Windows task launcher preserves PATH and login directories, logs both stre
   const lines = readFileSync(path.join(home, "logs", "up.log"), "utf8")
     .trim()
     .split(/\r?\n/);
-  assert.deepEqual(JSON.parse(lines[0]), { path: "test path only", codex: "test login directory", home, cwd: home });
+  const { cwd, ...environment } = JSON.parse(lines[0]);
+  assert.deepEqual(environment, { path: "test path only", codex: "test login directory", home });
+  assert.equal(realpathSync(cwd), realpathSync(home));
   assert.ok(lines.includes("engine error"));
 });

@@ -2,7 +2,7 @@
 // read access permits writes, or an account-wide group receives access instead of the actual sandbox user.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -37,6 +37,7 @@ for (const access of ["read", "edit"] as const) {
       for (const file of secrets) privacy.writePrivateFile(file, "test-only-secret");
       const data = join(folder, "context.json");
       privacy.writePrivateFile(data, "test-only-data");
+      privacy.writePrivateFile(data, "startup recovery rewrites existing context");
       privacy.agentDirectory(folder, account, access);
       const output = join(folder, "stdout-1.log");
       writeFileSync(output, "agent output");
@@ -55,14 +56,26 @@ for (const access of ["read", "edit"] as const) {
         !rules(folder, true).some((rule) => rule.sid === account),
         "privateDirectory must revoke a previous sharing grant",
       );
+      assert.ok(!rules(data).some((rule) => rule.sid === account), "revocation must also reach recovered context");
     },
   );
 }
 
-test("sharing refuses broad groups and legacy control directories", { skip: process.platform !== "win32" }, () => {
-  const folder = join(root, "bad");
-  for (const sid of ["S-1-1-0", "S-1-5-32-545", "SID';throw 'injection"])
-    assert.throws(() => privacy.agentDirectory(folder, sid, "edit"), /SID/);
-  privacy.writePrivateFile(join(folder, "entry.json"), "secret");
-  assert.throws(() => privacy.agentDirectory(folder, account, "edit"), /控制目录/);
-});
+test(
+  "sharing refuses broad groups, control directories and linked context",
+  { skip: process.platform !== "win32" },
+  () => {
+    const folder = join(root, "bad");
+    for (const sid of ["S-1-1-0", "S-1-5-32-545", "SID';throw 'injection"])
+      assert.throws(() => privacy.agentDirectory(folder, sid, "edit"), /SID/);
+    privacy.writePrivateFile(join(folder, "entry.json"), "secret");
+    assert.throws(() => privacy.agentDirectory(folder, account, "edit"), /控制目录/);
+    const outside = join(root, "outside");
+    const linked = join(root, "linked");
+    privacy.writePrivateFile(join(outside, "master.key"), "outside-secret");
+    privacy.privateDirectory(linked);
+    symlinkSync(outside, join(linked, "context.json"), "junction");
+    assert.throws(() => privacy.agentDirectory(linked, account, "edit"), /普通文件/);
+    assert.ok(!rules(join(outside, "master.key")).some((rule) => rule.sid === account));
+  },
+);

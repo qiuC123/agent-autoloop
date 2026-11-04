@@ -81,6 +81,7 @@ export async function conformance(base: string, config: Probe, request: typeof f
   const first = (await take()).job;
   const job = (await take()).job;
   assert.ok(job);
+  assert.notEqual(job.rule.ask, false, "一致性检查的问答规则不能禁用 ask");
   assert.equal(job.run, first.run);
   await call(`/v1/runs/${job.run}/started`, first.token, {}, 401);
   await call(`/v1/runs/${job.run}/started`, job.token, { session: `session-${tag}` });

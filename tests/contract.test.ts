@@ -4,6 +4,7 @@
 // receipt that doesn't parse, has unknown fields or breaks the protocol's limits is applied rather than sent back to be
 // rewritten; the receipt isn't found when the message says something after it, or a code block of another kind is taken for
 // one; a result longer than the hub takes is sent as it is; a browser/login block is reported as retryable failure.
+// A rule forbidding ask must not be prompted to ask, including examples and owner-only blocks.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "../worker/contract.ts";
@@ -66,6 +67,20 @@ test("the prompt says what to do and how to end, but not what anyone wrote", () 
   assert.ok(!text.includes("王某"));
   assert.ok(!text.includes("管理员权限"));
   assert.ok(!text.includes('"events"'), "a rule that can't emit isn't offered it");
+});
+
+test("ask false removes asking instructions and examples; true keeps the default prompt", () => {
+  const original = job();
+  const allowed = promptFor(original as any, "/tmp/ctx.json");
+  assert.equal(promptFor(job({ rule: { ...original.rule, ask: true } }) as any, "/tmp/ctx.json"), allowed);
+  assert.match(allowed, /用 ask 说明/);
+  const text = promptFor(job({ rule: { ...original.rule, ask: false } }) as any, "/tmp/ctx.json");
+  assert.match(text, /本规则不能发 ask，需要本人决定的事用 notice 说明或按规则交出事件/);
+  assert.doesNotMatch(text, /先征求决定|要问人就|用 ask|"ask"|ask 和 notice|不重复提问/);
+  assert.match(text, /待你处理：/);
+  assert.match(text, /不重做已完成的业务/);
+  assert.match(text, /waiting[\s\S]*cancel/);
+  for (const field of ["notice", "resolve", "later"]) assert.ok(text.includes(`"${field}"`));
 });
 
 test("the prompt mentions what this run is carrying on, and what it may emit", () => {

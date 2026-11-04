@@ -27,6 +27,7 @@ export const rules = parseRules(
       },
       {
         name: "two",
+        ask: false,
         when: { source: "app", types: ["two"] },
         to: "b",
         cwd: "/tmp",

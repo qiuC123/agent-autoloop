@@ -7,6 +7,7 @@
 // there; a scheduled task shown on the page naming a source or agent that isn't there or a malformed schedule; a time zone
 // that doesn't exist; the reserved source redefined; a null rule crashes reload instead of keeping the old rules.
 // A good file changing on disk takes effect; a bad one doesn't, and says why.
+// Non-boolean ask permissions must not silently enable questions.
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,6 +31,20 @@ const problem = (change: (r: any) => void, words: RegExp) => {
     },
   );
 };
+
+test("ask is optional and accepts only booleans", () => {
+  assert.equal(parseRules(JSON.stringify(good())).rules[0].ask, undefined);
+  for (const ask of [false, true]) {
+    const r = good();
+    r.rules[0].ask = ask;
+    assert.equal(parseRules(JSON.stringify(r)).rules[0].ask, ask);
+  }
+  for (const ask of [null, 0, 1, "false", [], {}]) {
+    problem((r) => {
+      r.rules[0].ask = ask;
+    }, /规则「意见」的 ask 要是 true 或 false/);
+  }
+});
 
 test("the fixture loads, with defaults filled in", () => {
   const r = parseRules(JSON.stringify(good()));

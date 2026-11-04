@@ -6,6 +6,7 @@
 // Source event IDs must not collide with internally generated answer or timer IDs.
 // Quiet notices must not escape through a channel; a stale writer must receive Conflict rather than a database failure.
 // Existing logs can contain a queued run with an old agent after a rules change; replay must retain claimed configurations.
+// A rule forbidding ask must reject every question without discarding the rest of a receipt or losing its acknowledgment.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -16,6 +17,89 @@ import { parseRules } from "../protocol/rules.ts";
 const environment = { secret: "simulation-secret", publicUrl: "https://hub.test" };
 const rules = parseRules(readFileSync(new URL("./rules.fixture.json", import.meta.url), "utf8"), 0, "UTC");
 const seeded = () => evolve(empty(), decide(empty(), { type: "rules", args: [rules] }, 1, environment).facts);
+
+test("ask permission rejects each question, preserves other receipt effects and replays the acknowledgment", () => {
+  for (const ask of [undefined, true, false]) {
+    let view = empty();
+    const log: Fact[] = [];
+    const act = (type: string, ...args: unknown[]) => {
+      const d = decide(view, { type, args }, 1000 + log.length, environment);
+      log.push(...d.facts);
+      view = evolve(view, d.facts);
+      return d.value;
+    };
+    try {
+      const configured = structuredClone(rules);
+      if (ask !== undefined) configured.rules[0].ask = ask;
+      configured.rules[0].emits = { source: "app", types: ["handoff.ready"] };
+      act("rules", configured);
+      act("ingest", "app", { id: "first", type: "feedback.new" });
+      const first = act("claimNext", "w1", "first");
+      assert.equal(first.rule.ask, ask);
+      act("finish", first.run, first.token, { outcome: "done", notice: [{ title: "旧通知", text: "待核实" }] });
+      const old = rows(view, "cards")[0].id;
+      act("ingest", "app", { id: "second", type: "feedback.new" });
+      const job = act("claimNext", "w1", "second");
+      const body = {
+        outcome: "done",
+        ask: [
+          { title: "问题一", text: "请选择", options: ["甲", "乙"] },
+          { title: "问题二", text: "请选择", options: ["甲", "乙"] },
+        ],
+        notice: [{ title: "新通知", text: "请处理" }],
+        resolve: [{ card: old, reason: "已核实" }],
+        later: [{ key: "check", at: "2026-11-05T09:00:00Z", about: "核实结果" }],
+        events: [{ id: "handoff", type: "handoff.ready" }],
+      };
+      const ack = act("finish", job.run, job.token, body);
+      assert.deepEqual(
+        ack.rejected,
+        ask === false ? Array(2).fill({ what: "ask", reason: "规则「意见」不能发 ask" }) : [],
+      );
+      assert.equal(rows(view, "cards").filter((c) => c.kind === "ask").length, ask === false ? 0 : 2);
+      assert.equal(view.get("cards", old)!.state, "closed");
+      assert.equal(rows(view, "cards").filter((c) => c.title === "新通知").length, 1);
+      assert.equal(rows(view, "timers").length, 1);
+      assert.equal(rows(view, "events").filter((e) => e.key === "handoff").length, 1);
+      assert.equal(view.get("runs", job.run)!.state, "done");
+      const before = snapshot(view);
+      view.close();
+      view = evolve(empty(), log);
+      assert.deepEqual(act("finish", job.run, job.token, body), { ...ack, duplicate: true });
+      assert.deepEqual(snapshot(view), before);
+    } finally {
+      view.close();
+    }
+  }
+});
+
+test("ask permission is checked at receipt time while the claimed job keeps its configuration", () => {
+  let view = seeded();
+  const act = (type: string, ...args: unknown[]) => {
+    const d = decide(view, { type, args }, 1000 + view.seq, environment);
+    view = evolve(view, d.facts);
+    return d.value;
+  };
+  try {
+    act("ingest", "app", { id: "change", type: "feedback.new" });
+    const job = act("claimNext", "w1", "held");
+    const changed = structuredClone(rules);
+    changed.rules[0].ask = false;
+    act("rules", changed);
+    const again = act("claimNext", "w1", "held");
+    assert.equal(again.rule.ask, undefined);
+    assert.deepEqual(
+      act("finish", job.run, again.token, {
+        outcome: "done",
+        ask: [{ title: "问题", text: "请选择", options: ["甲", "乙"] }],
+      }).rejected,
+      [{ what: "ask", reason: "规则「意见」不能发 ask" }],
+    );
+    assert.equal(rows(view, "cards").length, 0);
+  } finally {
+    view.close();
+  }
+});
 test("decisions are deterministic and leave their input untouched", () => {
   const view = seeded();
   const before = snapshot(view);

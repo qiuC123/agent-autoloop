@@ -2,6 +2,7 @@
 // the wire contract drifts from the validators, and conformance accepts a server that opens the wrong door.
 // Required job structure and inherited object names must not bypass schema checks; Unicode limits count code points.
 // Input labels must agree with receipt validation and answer versions must be positive safe integers.
+// The optional job.rule.ask permission must remain boolean on the wire.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkSchema } from "../protocol/schema.ts";
@@ -21,6 +22,26 @@ test("input labels accept up to 20 code points and answer versions are optional 
   for (const version of [undefined, 1, 7, 0, -1, 1.1, "1", null, Number.MAX_SAFE_INTEGER + 1]) {
     const valid = version === undefined || (Number.isSafeInteger(version) && Number(version) > 0);
     assert.equal(checkSchema("answer", { choice: 0, ...(version !== undefined && { version }) }).length === 0, valid);
+  }
+});
+
+test("job schemas accept an omitted or boolean ask permission, not other values", () => {
+  const job = {
+    run: 1,
+    token: "t",
+    attempt: 1,
+    session: null,
+    askFirst: [],
+    rule: { name: "rule", cwd: "/work" },
+    agent: { id: "a", name: "Agent", use: "command", access: "read" },
+    context: { events: [], answers: [], timers: [], waiting: [], open: [], decided: [] },
+  };
+  assert.deepEqual(checkSchema("job", job), []);
+  for (const ask of [false, true, null, "false", 0, [], {}]) {
+    assert.deepEqual(
+      checkSchema("job", { ...job, rule: { ...job.rule, ask } }),
+      typeof ask === "boolean" ? [] : ["job.rule.ask"],
+    );
   }
 });
 

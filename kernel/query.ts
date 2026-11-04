@@ -74,7 +74,7 @@ export function cardView(card: Row, env: Environment, ref: string | null = null,
 
 export function jobOf(view: View, run: Row, env: Environment): Job {
   const rules = configuration(view, run.rules_version);
-  const { name, cwd, skill, prompt, emits } = rules.rules.find((rule) => rule.name === run.rule)!;
+  const { name, cwd, skill, prompt, ask, emits } = rules.rules.find((rule) => rule.name === run.rule)!;
   const events = eventsOf(view, run.id);
   const eventIds = events.map((event) => event.id);
   const thread = { rule: run.rule, lane: run.lane };
@@ -90,7 +90,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
     run: run.id,
     token: credential(env, "run", run.id, run.issued),
     attempt: run.attempts + 1,
-    rule: { name, cwd, skill, prompt, emits },
+    rule: { name, cwd, skill, prompt, ...(ask === undefined ? {} : { ask }), emits },
     agent: { ...rules.agents[run.agent], id: run.agent },
     session: run.session ?? run.resume,
     askFirst: rules.askFirst,

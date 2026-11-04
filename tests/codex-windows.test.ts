@@ -1,7 +1,8 @@
 // Failure modes: the worker grants a guessed or group identity, probes a different sandbox mode/environment, or
-// a full-access launch unexpectedly changes ACLs. This uses a native fake CLI, never the installed Codex or a model.
+// a full-access launch unexpectedly changes ACLs. A cwd alias may resolve to its long or canonical path in the child.
+// This uses a native fake CLI, never the installed Codex or a model.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -15,6 +16,9 @@ test(
   "Codex prepares the actual sandbox account using this turn's policy, cwd and login environment",
   { skip: process.platform !== "win32" },
   () => {
+    const target = join(root, "working directory");
+    const cwd = `${target}\\.`;
+    mkdirSync(target);
     for (const access of ["read", "edit"] as const) {
       const folder = join(root, access);
       privateDirectory(folder);
@@ -27,7 +31,7 @@ test(
       const turn = {
         access,
         folder,
-        cwd: root,
+        cwd,
         contextFile: join(folder, "context.json"),
         prompt: "trusted",
         session: "s",
@@ -41,7 +45,7 @@ test(
         Buffer.from(got.args.at(-1), "base64").toString("utf16le"),
         "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
       );
-      assert.equal(got.cwd, root);
+      assert.equal(realpathSync(got.cwd), realpathSync(cwd));
       assert.equal(got.home, "test-login-directory");
     }
   },

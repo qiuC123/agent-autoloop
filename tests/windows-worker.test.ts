@@ -112,7 +112,7 @@ test(
       `import { existsSync, writeFileSync } from 'node:fs'; import path from 'node:path';
     export default {
       prepare(turn, env) { writeFileSync(path.join(turn.folder, 'prepared.json'), JSON.stringify({ turn,
-        env: Object.fromEntries(${JSON.stringify(keys)}.map(key => [key, env[key]])) })); },
+        env: Object.fromEntries(${JSON.stringify(keys)}.map(key => [key, Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1]])) })); },
       command(turn) { if (!existsSync(path.join(turn.folder, 'prepared.json'))) throw new Error('prepare was not called'); return turn.command; },
       read(stdout, code, stderr) { return code === null ? {} : code === 0 ? { text: stdout } : { error: stderr }; }
     };`,
@@ -124,7 +124,12 @@ test(
     const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('准备通过'); } }, 20);`);
     f.job.agent.use = "prepared";
     const worker = f.worker();
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH");
+    const pathValue = pathKey === undefined ? undefined : process.env[pathKey];
     try {
+      if (pathKey !== undefined) delete process.env[pathKey];
+      process.env.Path = pathValue ?? "";
+      assert.ok(Object.keys(process.env).includes("Path"), "the regression needs a mixed-case environment key");
       await worker.tick();
       const entry = worker.entries()[0];
       const prepared = join(entry.folder ?? entry.dir, "prepared.json");
@@ -136,6 +141,7 @@ test(
       assert.equal(seen.turn.contextFile, join(entry.folder!, "context.json"));
       assert.ok(seen.turn.prompt.includes(seen.turn.contextFile));
       assert.deepEqual(seen.env, JSON.parse(readFileSync(actual, "utf8")));
+      assert.equal(seen.env.PATH, pathValue ?? "");
       assert.equal(seen.env.AGENT_AUTOLOOP_SECRET_TEST, undefined);
       assert.equal(seen.env.AGENT_AUTOLOOP_CONTEXT, seen.turn.contextFile);
       assert.equal(existsSync(join(entry.dir, "entry.json")), true);
@@ -155,6 +161,8 @@ test(
       );
       assert.equal(f.results[0].summary, "准备通过");
     } finally {
+      delete process.env.Path;
+      if (pathKey !== undefined && pathValue !== undefined) process.env[pathKey] = pathValue;
       writeFileSync(release, "finish");
       await until(
         () => worker.entries().length === 0,

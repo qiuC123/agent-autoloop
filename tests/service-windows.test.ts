@@ -1,14 +1,62 @@
-// Prevents registering a machine-wide task, losing the terminal PATH, executing quoted paths as code, or removing another task.
+// Prevents losing custom rules or PATH, registering a machine-wide task, executing paths as code, or removing another task.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { windowsService } from "../host/windows-service.ts";
 
 const directory = mkdtempSync(path.join(tmpdir(), "agent-autoloop-service-"));
 after(() => rmSync(directory, { recursive: true, force: true }));
+
+test("Windows install captures current rules, updates them and removes them on reinstall; runner uses the saved path", () => {
+  const home = path.join(directory, "rules service");
+  const program = path.join(home, "engine.mjs");
+  const service = windowsService({
+    home,
+    program,
+    user: "S-1-5-21-123",
+    run: () => ({ status: 0, stdout: Buffer.from(service.xml()).toString("base64") }),
+  });
+  const previous = process.env.AGENT_AUTOLOOP_RULES;
+  try {
+    for (const rules of [undefined, "./规则 & space/%test.json", path.join(directory, "更新 rules.json"), undefined]) {
+      if (rules === undefined) delete process.env.AGENT_AUTOLOOP_RULES;
+      else process.env.AGENT_AUTOLOOP_RULES = rules;
+      service.install();
+      const config = JSON.parse(readFileSync(service.configFile, "utf8"));
+      assert.equal(Object.hasOwn(config.agentHomes, "AGENT_AUTOLOOP_RULES"), rules !== undefined);
+      assert.equal(config.agentHomes.AGENT_AUTOLOOP_RULES, rules === undefined ? undefined : path.resolve(rules));
+      writeFileSync(
+        program,
+        `import { RULES_FILE } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../host/home.ts")).href)};
+console.log(JSON.stringify({ rules: process.env.AGENT_AUTOLOOP_RULES, file: RULES_FILE }));`,
+      );
+      const log = path.join(home, "logs", "up.log");
+      writeFileSync(log, "");
+      const env = { ...process.env };
+      delete env.AGENT_AUTOLOOP_RULES;
+      const result = spawnSync(
+        process.execPath,
+        [path.resolve(import.meta.dirname, "../host/windows-service.ts"), service.configFile],
+        {
+          env,
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const child = JSON.parse(readFileSync(log, "utf8"));
+      assert.equal(child.rules, rules === undefined ? undefined : path.resolve(rules));
+      assert.equal(child.file, rules === undefined ? path.join(home, "rules.json") : path.resolve(rules));
+    }
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_AUTOLOOP_RULES;
+    else process.env.AGENT_AUTOLOOP_RULES = previous;
+  }
+});
 
 test("Windows task uses the current user's interactive login, one instance and no execution time limit", () => {
   const calls: [string, string[]][] = [];
@@ -160,7 +208,7 @@ test("Windows task launcher preserves PATH and login directories, logs both stre
   const program = path.join(home, "engine.mjs");
   writeFileSync(
     program,
-    `console.log(JSON.stringify({path:process.env.PATH,codex:process.env.CODEX_HOME,home:process.env.AGENT_AUTOLOOP_HOME,cwd:process.cwd()}));console.error('engine error');process.exitCode=7;`,
+    `console.log(JSON.stringify({path:process.env.PATH,codex:process.env.CODEX_HOME,home:process.env.AGENT_AUTOLOOP_HOME,rules:process.env.AGENT_AUTOLOOP_RULES,cwd:process.cwd()}));console.error('engine error');process.exitCode=7;`,
   );
   const configuration = path.join(home, "service.json");
   writeFileSync(
@@ -170,7 +218,7 @@ test("Windows task launcher preserves PATH and login directories, logs both stre
       node: process.execPath,
       program,
       searchPath: "test path only",
-      agentHomes: { CODEX_HOME: "test login directory" },
+      agentHomes: { CODEX_HOME: "test login directory", AGENT_AUTOLOOP_RULES: path.join(home, "旧规则 & space.json") },
     }),
   );
   const result = spawnSync(
@@ -183,7 +231,12 @@ test("Windows task launcher preserves PATH and login directories, logs both stre
     .trim()
     .split(/\r?\n/);
   const { cwd, ...environment } = JSON.parse(lines[0]);
-  assert.deepEqual(environment, { path: "test path only", codex: "test login directory", home });
+  assert.deepEqual(environment, {
+    path: "test path only",
+    codex: "test login directory",
+    home,
+    rules: path.join(home, "旧规则 & space.json"),
+  });
   assert.equal(realpathSync(cwd), realpathSync(home));
   assert.ok(lines.includes("engine error"));
 });

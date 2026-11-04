@@ -38,6 +38,8 @@ Windows 的 Codex 插件会用当前配置的 `codex sandbox` 探测工具实际
 
 Windows 用当前用户登录时启动的计划任务常驻，不需要管理员权限；日志在 `~/.agent-autoloop/logs/up.log`。安装时保留终端的 PATH 和 Agent 配置目录，沿用本人登录；修改它们后重新运行 `agent-autoloop service install`。用 `--no-service` 安装时，在终端运行 `agent-autoloop up`。`agent-autoloop service status` 查看常驻状态，`service stop` 停止中台并保留下次登录启动，`service remove` 停止并移除计划任务。停止单轮用 `agent-autoloop stop <轮次>`，它会停掉整棵 Agent 进程树。Shell 示例需在对应的 shell 中运行，Windows 原生命令脚本用明确的 `node.exe` / `.exe` 和参数。
 
+三个平台的 `agent-autoloop service install` 都会记住 `AGENT_AUTOLOOP_RULES` 指定的自定义规则路径，并显示其绝对路径；修改或取消设置后重新安装服务即可更新。
+
 装好后用你本机的 Agent 真实走一遍“提问 → 退出等回复 → 拍板 → 接着干完”：
 
 ```bash

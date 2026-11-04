@@ -495,7 +495,10 @@ async function stop(args: string[]) {
 }
 
 function service(args: string[]) {
-  if (args[0] === "install") return installService();
+  if (args[0] === "install") {
+    installService();
+    return console.log(`服务已安装，规则文件：${RULES_FILE}`);
+  }
   if (args[0] === "remove") return removeService();
   if (process.platform === "win32" && args[0] === "stop") {
     stopUp();

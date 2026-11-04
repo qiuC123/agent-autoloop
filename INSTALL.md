@@ -22,6 +22,8 @@ irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 
 
 Windows 常驻用当前用户的登录计划任务，使用交互登录令牌，不保存密码、不提权；任务名按数据目录区分，只跑一个实例，失败一分钟后重启。日志在数据目录的 `logs/up.log`。服务保留安装终端的 PATH 和 `HOME`、`USERPROFILE`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME` 中已有的目录设置；没有复制 Agent 凭据。修改这些目录或 PATH 后重新运行 `agent-autoloop service install`。
 
+三个平台的 `agent-autoloop service install` 都会记住 `AGENT_AUTOLOOP_RULES` 指定的自定义规则路径（相对路径按安装时的工作目录转成绝对路径），并在成功后打印规则文件位置；重装采用当前环境的新值，取消设置后重装则移除旧值，恢复使用数据目录下的 `rules.json`。
+
 GitHub Issue 轮询和 PR 交付等功能另需已登录的 `gh`，按对应场景说明配置；运行 Agent 也仍需该 Agent 自己的登录或授权。
 
 用户指定本地仓库时，用该目录的安装脚本，并把 `AGENT_AUTOLOOP_REPO` 设成它的绝对路径。不要下载 GitHub 的旧脚本，也不要用未提交的文件冒充已安装版本；安装器克隆的是本地仓库的 HEAD。

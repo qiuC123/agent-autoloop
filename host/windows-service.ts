@@ -125,6 +125,8 @@ export function windowsService(options: Options) {
           process.env[key] === undefined ? [] : [[key, process.env[key]]],
         ),
       );
+      if (process.env.AGENT_AUTOLOOP_RULES !== undefined)
+        agentHomes.AGENT_AUTOLOOP_RULES = path.resolve(process.env.AGENT_AUTOLOOP_RULES);
       writePrivateFile(configFile, JSON.stringify({ home, node, program, searchPath, agentHomes }) + "\n");
       writePrivateFile(taskFile, Buffer.from("\ufeff" + xml(), "utf16le"));
       checked(["/Create", "/TN", name, "/XML", taskFile, "/F"]);

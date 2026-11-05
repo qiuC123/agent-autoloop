@@ -240,6 +240,8 @@ POST /v1/runs/12/cancel     {}
 
 Windows 后台使用当前用户登录时启动的计划任务，`InteractiveToken`、最低权限、`IgnoreNew` 单实例、失败一分钟后重启；不存密码，不改系统 PATH。安装时保留终端 PATH，登录状态仍由 Agent 自己读取。启动日志追加到 `logs/up.log`。同一数据目录另用带随机凭据的本地命名管道拒绝第二个中台；停止通过该管道核对身份并退出，保留独立 Agent。`service remove` 删除属于当前安装的任务并停止中台；卸载保留数据。
 
+三个平台的服务安装都会保存当前 `AGENT_AUTOLOOP_RULES` 的绝对路径，未设置时不保存覆盖值，仍从数据目录读取 `rules.json`；重装会更新或移除旧覆盖值。`service install` 成功后显示规则文件位置。Windows 沿用 `service.json` 的 `agentHomes`，已有手动写入的 `AGENT_AUTOLOOP_RULES` 仍有效。
+
 安装与卸载不改变 HTTP 协议。`agent-autoloop --version` 显示包版本与提交；`agent-autoloop uninstall` 确认后移除自身程序、链接和服务，始终保留规则、密钥和记录；`--yes` 只跳过确认。
 
 ## 失败时会怎样

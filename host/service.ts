@@ -17,6 +17,7 @@ const label = () =>
 const plistFile = () => path.join(homedir(), "Library/LaunchAgents", `${label()}.plist`);
 const unitFile = () => path.join(homedir(), ".config/systemd/user", `${label()}.service`);
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+const systemd = (text: string) => JSON.stringify(text).replaceAll("%", "%%");
 
 export function plist() {
   const logs = path.join(HOME, "logs");
@@ -25,13 +26,17 @@ export function plist() {
   const program = [process.execPath, "--disable-warning=ExperimentalWarning", PROGRAM, "up"];
   const programArguments = program.map((part) => `<string>${xml(part)}</string>`).join("");
   const homeEntry = `<key>AGENT_AUTOLOOP_HOME</key><string>${xml(HOME)}</string>`;
+  const rulesEntry =
+    process.env.AGENT_AUTOLOOP_RULES === undefined
+      ? ""
+      : `<key>AGENT_AUTOLOOP_RULES</key><string>${xml(path.resolve(process.env.AGENT_AUTOLOOP_RULES))}</string>`;
   const pathEntry = `<key>PATH</key><string>${xml(searchPath)}</string>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${label()}</string>
   <key>ProgramArguments</key><array>${programArguments}</array>
-  <key>EnvironmentVariables</key><dict>${homeEntry}${pathEntry}</dict>
+  <key>EnvironmentVariables</key><dict>${homeEntry}${rulesEntry}${pathEntry}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -42,12 +47,16 @@ export function plist() {
 }
 
 export function unit() {
+  const rulesEntry =
+    process.env.AGENT_AUTOLOOP_RULES === undefined
+      ? ""
+      : `Environment=${systemd(`AGENT_AUTOLOOP_RULES=${path.resolve(process.env.AGENT_AUTOLOOP_RULES)}`)}\n`;
   return `[Unit]
 Description=Agent 自动化中台
 
 [Service]
-Environment=AGENT_AUTOLOOP_HOME=${HOME}
-ExecStart=${process.execPath} --disable-warning=ExperimentalWarning ${PROGRAM} up
+Environment=${systemd(`AGENT_AUTOLOOP_HOME=${HOME}`)}
+${rulesEntry}ExecStart=${process.execPath} --disable-warning=ExperimentalWarning ${PROGRAM} up
 Restart=always
 RestartSec=10
 

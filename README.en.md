@@ -38,6 +38,8 @@ Windows uses a scheduled task triggered when the current user signs in, without 
 
 On Windows, the Codex plugin probes the actual sandbox user SID with the current `codex sandbox` configuration. Only the turn's `agent/` data directory is shared: read access for `read`, read/write for the default `edit`. Hub databases, keys, configuration and worker control records remain owner-only. No user group is granted access, and the plugin never switches to `full`.
 
+On all three platforms, `agent-autoloop service install` remembers a custom rules path set with `AGENT_AUTOLOOP_RULES` and prints its absolute path; reinstall after changing or unsetting the variable to update the service.
+
 Then run a real loop with your own agent — ask, exit while it waits, make the call, resume:
 
 ```bash

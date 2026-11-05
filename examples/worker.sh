@@ -1,4 +1,5 @@
 #!/bin/sh
+# Owner maintenance blocks new claims; keep the same claim when retrying a lost response, even during draining.
 # A short, synchronous worker. Longer jobs need heartbeats and cancellation, as worker/worker.ts implements.
 set -eu
 : "${AGENT_AUTOLOOP_URL:?}" "${AGENT_AUTOLOOP_KEY:?}"

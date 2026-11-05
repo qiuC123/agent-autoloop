@@ -2,7 +2,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { rows, type View } from "./evolve.ts";
 
-export type Environment = { secret: string; publicUrl: string };
+export type Environment = { secret: string; publicUrl: string; allowNewClaims?: boolean };
 
 export const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 

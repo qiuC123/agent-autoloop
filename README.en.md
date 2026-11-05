@@ -134,6 +134,16 @@ Besides `ask`, receipts can send notifications (`notice`), resolve open cards (`
 
 Submitting an open `ask` / `notice` again with the same key and kind in the same thread updates that card when its content changes; identical content is not resent. Feishu and the card page accept both options and free text. Optional `input` sets the text field label (up to 20 Unicode code points), defaulting to “别的想法” (other thoughts). Answers carry the displayed version; outdated content is rejected with “卡片已更新，请重看” (the card has changed; please review it). Legacy channels may still omit the version; see the [protocol](docs/protocol.md#通道把卡片送到你面前) for compatibility.
 
+### Pause claims for deployment
+
+The owner-only `GET /v1/maintenance` and `POST /v1/maintenance` provide a persistent gate. Send `{"action":"drain","deadline":"<future ISO timestamp>"}` to stop new claims; the host returns a fresh `id`. Existing claims can still be recovered by the same worker and claim ID, including before `started`. Heartbeats, results, cancellation, events, cron, deferred checks, answers and card delivery continue normally.
+
+When `claimed` and `unknown` are both zero, send `{"action":"hold","id":"<returned id>"}`. Queued work, open questions and future checks need not be empty. A nonempty count returns 409. Stop the service, update it, restart, and verify the reported mode and accepted rules before sending `{"action":"resume","id":"<same id>"}`. Restart preserves `held`. A stale ID cannot release a later maintenance cycle; repeating entry while active, the same renewal, or the current resume is idempotent. Entry never regresses held to draining.
+
+Every successful request returns `mode`, `id`, `entered_at`, `deadline`, `claimed`, `unknown`, `expired`, `problem`, `rules_version` and `rules_hash`. The hash is SHA-256 of the UTF-8 `JSON.stringify` of the accepted, parsed rules including defaults, not the file bytes. Invalid rules leave the previous version and hash visible. Deadline expiry only flags external verification; it never reopens the gate. After checking, renew with `{"action":"renew","id":"<same id>","deadline":"<future ISO timestamp>"}` before resuming. Renewals cannot shorten the deadline. Resume may also cancel draining; it always requires the current ID.
+
+The host atomically replaces `<home>/maintenance.json` under the same SQLite transaction boundary as claims and rechecks it on every long-poll wakeup. Only the deterministic `environment.allowNewClaims` boolean enters the kernel. Missing, unreadable or invalid files report `draining`, null identity/timestamps and a `problem`, and block new work; repair access and start a new drain cycle after verification. A host-only initialization marker in SQLite distinguishes legacy installations (initialized to normal once) from a subsequently lost file, including after projection rebuilds. Back up the file with the database. Business fact formats, claim snapshots, rule identities and legacy worker responses are unchanged. Engines predating this feature do not have this endpoint. See the [full protocol](docs/protocol.md#持久维护闸门).
+
 ## Ready-to-use recipes
 
 Each recipe includes rules, a task Skill, and setup instructions (written in Chinese).

@@ -276,6 +276,7 @@ function claimNext(draft: Draft, worker: string, claim: string) {
     claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp);
   // The same claim again means the answer got lost: it gets back the run it already has.
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
+  if (!held && draft.env.allowNewClaims === false) return null;
   const run = held ?? runs.find(claimable);
   if (!run) return null;
   if (!held) assignQueued(draft, run);

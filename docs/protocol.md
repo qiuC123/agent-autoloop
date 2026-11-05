@@ -111,6 +111,7 @@ GET /v1/work?claim=<这次领活的编号>&wait=50&running=7,8&capacity=1    Aut
 
 - 没活时最多等 `wait` 秒，新活一来立即返回。`running` 是手上在跑的，同时也是心跳。`capacity=0` 只报到、不领活。
 - 响应丢了，用同一个 `claim` 再来一次，拿回的是同一份活。
+- 本人开启维护后不再发新 claim；同一 worker 已领取的同一 claim 仍可重取。心跳、回执、取消和卡片不受维护影响，响应字段不变。
 - `cancel` 是要停掉的。POSIX 接单程序先向整个进程组发停止信号，10 秒后仍有进程运行就强制结束；Windows 用 Job Object 立即结束整个进程树。确认没有活进程后才交 `outcome: "cancelled"`，这个事项才放开。停止期间重启接单程序也继续这一步。
 - Windows 10/11 使用系统 .NET Framework 4.x 编译私有目录中的进程托管器。进程在创建时原子加入禁止脱离的 Job，唯一的长期 Job 句柄由托管器持有，关闭即终止整树；因此外部强杀托管器也清理子孙。重启根据持久化的随机 Job 名检查和停止，不凭可能重用的 PID。启动参数文件的独占锁覆盖尚未创建 Job 的阶段；恢复方拿到同一锁后才可撤销迟到启动，不能先释放轮次再让旧托管器执行业务。中台自身退出不会关闭独立托管器，重启可认领原有 Agent。Windows Codex 插件用同一启动环境与权限模式运行 `codex sandbox`，探测实际工具用户 SID，只给该 SID 本轮 `agent/` 资料目录的读权限（`read`）或读写权限（`edit`）。context 和输出在资料目录，轮次凭据、退出标记和启动参数仍在私有父目录；hub 数据库、主密钥、秘密及配置不共享。不按账号名或用户组猜测身份，不修改全局沙箱配置或自动改用完整权限。PATH 和登录目录继承启动终端，npm Node shim 解析为 Node 参数，不经过命令解释器；其他 batch 命令请明确写 `node` 与脚本或使用原生程序。
 
@@ -254,6 +255,44 @@ Windows 后台使用当前用户登录时启动的计划任务，`InteractiveTok
 
 安装与卸载不改变 HTTP 协议。`agent-autoloop --version` 显示包版本与提交；`agent-autoloop uninstall` 确认后移除自身程序、链接和服务，始终保留规则、密钥和记录；`--yes` 只跳过确认。
 
+### 持久维护闸门
+
+本人用同一个地址读状态和切换模式；其他种类的密钥、轮次 token 和卡片链接都不能操作它。
+
+```jsonc
+// Authorization: Bearer <本人的密钥>
+GET /v1/maintenance
+// 200（示例中的 id 每次新维护由宿主生成）
+{ "mode": "draining", "id": "2d84c800-03ea-4d45-8b10-938628a08bc0",
+  "entered_at": "2026-11-05T02:00:00.000Z", "deadline": "2026-11-05T03:00:00.000Z",
+  "claimed": 1, "unknown": 0, "expired": false, "problem": null,
+  "rules_version": 42, "rules_hash": "<SHA-256>" }
+
+POST /v1/maintenance
+{ "action": "drain", "deadline": "2026-11-05T03:00:00.000Z" }
+{ "action": "hold", "id": "<上面返回的 id>" }
+{ "action": "renew", "id": "<同一个 id>", "deadline": "2026-11-05T04:00:00.000Z" }
+{ "action": "resume", "id": "<同一个 id>" }
+// 每个对象是一次独立请求；成功都返回与 GET 相同的状态。
+```
+
+| 动作 / 状态 | 约定 |
+|---|---|
+| `drain` → `draining` | 原子关闭新领取，生成新 `id`，期限必须在将来；已在维护中就返回当前状态，不换 ID、不延长期限、不从 held 退回 draining |
+| `hold` → `held` | 必须匹配 ID，且 `claimed=0`、`unknown=0`；否则 409。领取后还没报 started 的也算 claimed；queued、等回答和 later 不要求清空 |
+| `renew` | 匹配 ID，保持模式及 entered_at；只能延长到将来或重复当前期限，不能缩短。重复同一续期无额外作用 |
+| `resume` → `normal` | 只有当前 ID 可以恢复；期限已到返回 409，需外部核对后续期再恢复。正常状态保留最后一次 ID，重复 resume 成功；旧 ID 解不开下一次维护 |
+| 期限到了 | `expired=true`，只是要求外部核对，绝不自动恢复；仍可排空并进入 held |
+| 文件缺失、不可读或非法 | `mode=draining`、`id/entered_at/deadline=null`、`problem` 如实说明，不能新领取。本人核对并修复文件访问后，可重新 drain 建立新 ID；不能拿旧 ID 直接 resume |
+
+事件、cron、later 和本人回答照常持久入队；卡片照常送达，已领取任务继续心跳、报 started、交结果和处理取消。失联但仍为 claimed 的同一 claim 可重取，既有 token 轮换及回执重放规则不变；unknown 的迟到结果照常收，确认结束后才允许 hold。`drain` 和 `hold` 立即返回，不让 Agent 等排空。
+
+`rules_version` 是当前生效配置在事实日志中的版本，`rules_hash` 是该配置（解析并补齐默认值后）的 `JSON.stringify` UTF-8 内容的 SHA-256，不是磁盘文件原文的哈希。坏规则未被接受时，两者仍指向旧配置。部署方应比较部署前后版本、哈希与预期配置，并同时检查 `problem`、计数和模式；HTTP 200 本身不是规则已生效或排空的证明。
+
+宿主在既有 `execute` / SQLite `BEGIN IMMEDIATE` 串行边界内鉴权、读取 `<home>/maintenance.json`、判断计数并原子替换文件；claim 在同一边界内重新读取文件，给 `decide` 的 `environment.allowNewClaims` 传布尔值。长轮询每次唤醒都重新走这个入口。内核只在找不到已领取的同一 claim 时检查这个输入，不读文件或时钟；缺省输入保留旧内核调用行为。文件写入先同步临时文件、再 rename，POSIX 还同步目录；重启不会清除 held。
+
+首次接入此功能且文件不存在时，宿主创建 `normal`，三个时间/身份字段为 null；SQLite 的宿主表 `host_maintenance` 只记“已经初始化”，用于区分旧安装与后来丢失的文件，投影重建不清除此标记。维护模式以文件为准，不写业务事实、不改既有日志格式、不改变规则身份或领取快照。备份保留维护文件和数据库；升级前已有的客户端无需改协议。部署顺序是 drain → 确认无 claimed/unknown 后 hold → 停服、更新、重启 → 核对状态与生效规则 → 用保存的 ID 显式 resume。首次升级到支持维护的版本前，旧引擎尚无这个口子。
+
 ## 失败时会怎样
 
 | 出了什么事 | 会怎样 |
@@ -285,7 +324,7 @@ Windows 后台使用当前用户登录时启动的计划任务，`InteractiveTok
 | 一轮的 token | 报告这一轮的这一次执行 | 碰别的轮次 |
 | 通道的密钥 | 领卡片、报告、转达 `answerers` 的回答 | 其他一切 |
 | 带权限的卡片链接 | 回答这一张卡片 | 其他一切 |
-| 本人的密钥 | 看全部、回答、结案、停止 | 发事件，领活，改规则（规则只在文件里） |
+| 本人的密钥 | 看全部、回答、结案、停止、控制维护 | 发事件，领活，改规则（规则只在文件里） |
 
 普通访问密钥只保存 SHA-256；本机主密钥另存 `master.key`。接单程序不把中台密钥放进 Agent 的提示词或资料文件，文件系统的访问范围由 Agent 权限决定。
 

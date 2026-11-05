@@ -33,6 +33,12 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台是当前用户登录时启动的计划任务，保留安装终端的 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保留任务只停中台，`service remove` 再删任务；独立 Agent 保留供重启认领；`stop <轮次>` 才会结束该轮整个 Job 进程树。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
 
+## 暂停领活、排空与恢复
+
+本人密钥调用 `GET/POST /v1/maintenance`。先 `{"action":"drain","deadline":"<将来的 ISO 时间>"}`，保存返回的 `id`；排空由外部客户端核对，Agent 本轮直接结束，不阻塞等。已有任务仍能重取、心跳、交结果和取消，事件、回答、定时及卡片照常处理。只有 claimed 和 unknown 都为零，`{"action":"hold","id":"<本次 id>"}` 才成功，queued、等回答和 later 不必清空。
+
+hold 后停服、更新、启动，维护状态仍保留。外部核对 `problem=null`、模式、计数及生效的 `rules_version` / `rules_hash` 后，才显式 `{"action":"resume","id":"<本次 id>"}`。旧 ID 不能解开下一次维护。过期仍关闭，核对后先用 `renew` 带同一 ID 和将来的 deadline 续期；坏文件也关闭，修复访问并重新 drain 建立新 ID，不删除维护文件来恢复。备份包括 `maintenance.json`。请求、幂等和兼容细节见[协议](../../docs/protocol.md#持久维护闸门)。
+
 ## 写处理手册
 
 一条长期的活配一个 Skill。手册里写清这件事怎么算做完、怎么核实，不用写怎么结束一轮：提示词已经说了。几个要点：
@@ -156,7 +162,7 @@ MCP 客户端的启动程序填 `node`，参数为本机引擎绝对路径 `bin/
 
 接插件先在专用测试中台验证：`agent-autoloop conformance <地址> --config <测试凭据文件>`。文件里的 `keys` 分别放来源、接单程序、通道、本人密钥；`eventType` 匹配测试规则，`answerer` 在测试通道的允许名单内。检查会写事件和卡片，不指向正在用的中台。协议类型在 `protocol/schema.json`。
 
-`kernel/` 不读时钟、不取随机数。判断、事实追加和 `evolve` 更新投影在同一 WAL + FULL 事务里完成，提交后才应答。正常启动复用带游标和编号高水位的投影；格式指纹变化时从日志逐条重建，不改变旧事实。`agent-autoloop why 42` 查一轮的事件、规则和回执；`GET /v1/stream?after=42` 供本人客户端按序号续读。备份要一起保留 `hub.db` 和私有的 `master.key`（POSIX `0600`，Windows 当前用户 ACL）；后者推导轮次和卡片链接的 token。普通访问密钥只保存哈希。
+`kernel/` 不读时钟、不取随机数。判断、事实追加和 `evolve` 更新投影在同一 WAL + FULL 事务里完成，提交后才应答。正常启动复用带游标和编号高水位的投影；格式指纹变化时从日志逐条重建，不改变旧事实。`agent-autoloop why 42` 查一轮的事件、规则和回执；`GET /v1/stream?after=42` 供本人客户端按序号续读。备份要一起保留 `hub.db`、`maintenance.json` 和私有的 `master.key`（POSIX `0600`，Windows 当前用户 ACL）；后者推导轮次和卡片链接的 token。普通访问密钥只保存哈希。
 
 ## 版本与卸载
 

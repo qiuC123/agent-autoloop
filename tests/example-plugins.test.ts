@@ -2,7 +2,8 @@
 // `agent-autoloop add` has put it elsewhere; add leaves the entry where the loader doesn't look; hello-agent's read throws on
 // output it doesn't expect (a throw stops the worker) or loses the session; hello-channel writes a card but never reports
 // it, so the hub sends it again every minute; hello-source takes a wrong or missing signature, or gives an event the hub
-// refuses; an example drifts from the engine's types; a command in the tutorial doesn't run as written.
+// refuses; an example drifts from the engine's types; a command in the tutorial doesn't run as written; slow Windows
+// worker preparation blocks the hub until its keep-alive timer resets a connection with a state request already queued.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
@@ -12,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import helloAgent from "../examples/plugins/hello-agent/agent.ts";
 import helloChannel from "../examples/plugins/hello-channel/channel.ts";
 import helloSource from "../examples/plugins/hello-source/source.ts";
@@ -220,10 +222,45 @@ test("agent-autoloop add from a git repository, then all three run through a rea
   );
   const owner = { authorization: `Bearer ${newKey(home, "owner", "me")}` };
   writeFileSync(join(home, "secrets.env"), "AGENT_AUTOLOOP_SECRET_SHOP=s3cret\n");
-  const up = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", CLI, "up"], {
-    env: { ...cleanEnv(), AGENT_AUTOLOOP_HOME: home, SHELL: "/bin/sh" },
-    stdio: "ignore",
+  const preparing = join(home, "preparing");
+  const preload = join(home, "slow-preparation.mjs");
+  if (process.platform === "win32") {
+    writeFileSync(
+      preload,
+      `import cp from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const original = cp.execFileSync;
+let delayed = false;
+cp.execFileSync = function (file, args, ...rest) {
+  const index = args?.indexOf("-EncodedCommand");
+  const script = index >= 0 ? Buffer.from(args[index + 1], "base64").toString("utf16le") : "";
+  const encoded = /FromBase64String\\('([^']+)'\\)/.exec(script)?.[1];
+  const target = encoded ? Buffer.from(encoded, "base64").toString().replaceAll("\\\\", "/") : "";
+  if (!delayed && target.includes("/worker/runs/")) {
+    delayed = true;
+    writeFileSync(${JSON.stringify(preparing)}, "ready");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 8000);
+  }
+  return original.call(this, file, args, ...rest);
+};
+syncBuiltinESMExports();`,
+    );
+  }
+  const preloadArgs = process.platform === "win32" ? ["--import", pathToFileURL(preload).href] : [];
+  const env = cleanEnv();
+  if (process.platform === "win32") {
+    // Windows accepts Path as PATH; a worker thread's default environment copy does not.
+    for (const name of Object.keys(env)) if (name.toLowerCase() === "path") delete env[name];
+    env.Path = process.env.PATH;
+  }
+  const up = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", ...preloadArgs, CLI, "up"], {
+    env: { ...env, AGENT_AUTOLOOP_HOME: home, SHELL: "/bin/sh" },
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let output = "";
+  up.stdout.on("data", (chunk) => (output += chunk));
+  up.stderr.on("data", (chunk) => (output += chunk));
   const stream = new AbortController();
   try {
     await until("中台启动", () =>
@@ -238,8 +275,11 @@ test("agent-autoloop add from a git repository, then all three run through a rea
     const accepted = await post(sign("s3cret", body));
     assert.equal(accepted.status, 200);
     assert.deepEqual((await accepted.json()).events[0].routed, ["订单"]);
+    if (process.platform === "win32") await until("Windows 接单准备已阻塞", () => existsSync(preparing));
     const run = await until("这一轮做完", async () => {
       const state = await (await fetch(`${url}/v1/state`, { headers: owner })).json();
+      const failed = state.runs.find((run: { error: string | null }) => run.error);
+      assert.ok(!failed, failed?.error);
       return state.runs.find((run: { state: string }) => run.state === "done");
     });
     assert.match(run.summary, /收到了 \d+ 字的提示词，权限 read/, "the rule's access reaches the plugin");
@@ -253,6 +293,8 @@ test("agent-autoloop add from a git repository, then all three run through a rea
       facts += decoder.decode((await reader.read()).value, { stream: true });
       return /"type":"delivered"/.test(facts);
     });
+  } catch (error) {
+    throw new Error(`示例闭环失败\n${output}`, { cause: error });
   } finally {
     stream.abort();
     up.kill("SIGTERM");

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const edits: [string, string, string, string][] = [
+  ["maintenance-gate", "decide.ts", "if (!held && draft.env.allowNewClaims === false)", "if (false)"],
   ["ask-permission", "decide.ts", "if (rule?.ask === false)", "if (false)"],
   [
     "receipt-fyi",

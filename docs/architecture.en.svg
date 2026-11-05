@@ -157,6 +157,8 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 <text x="324" y="414.5" class="n" text-anchor="middle">5</text>
 <text x="232" y="415" class="l" text-anchor="end">one tap resumes the chat</text>
 
+<text x="480" y="568" class="s" text-anchor="middle">Host maintenance: drain → hold across restarts → explicit resume; kernel receives only an allow-new-claims boolean</text>
+
 <!-- Bottom: Delivery pipeline -->
 <rect class="plug" x="22" y="584" width="916" height="72" rx="14"/>
 <text x="40" y="614" class="h2">Code delivery pipeline</text>

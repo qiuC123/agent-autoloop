@@ -248,8 +248,14 @@ syncBuiltinESMExports();`,
     );
   }
   const preloadArgs = process.platform === "win32" ? ["--import", pathToFileURL(preload).href] : [];
+  const env = cleanEnv();
+  if (process.platform === "win32") {
+    // Windows accepts Path as PATH; a worker thread's default environment copy does not.
+    for (const name of Object.keys(env)) if (name.toLowerCase() === "path") delete env[name];
+    env.Path = process.env.PATH;
+  }
   const up = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", ...preloadArgs, CLI, "up"], {
-    env: { ...cleanEnv(), AGENT_AUTOLOOP_HOME: home, SHELL: "/bin/sh" },
+    env: { ...env, AGENT_AUTOLOOP_HOME: home, SHELL: "/bin/sh" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -272,6 +278,8 @@ syncBuiltinESMExports();`,
     if (process.platform === "win32") await until("Windows 接单准备已阻塞", () => existsSync(preparing));
     const run = await until("这一轮做完", async () => {
       const state = await (await fetch(`${url}/v1/state`, { headers: owner })).json();
+      const failed = state.runs.find((run: { error: string | null }) => run.error);
+      assert.ok(!failed, failed?.error);
       return state.runs.find((run: { state: string }) => run.state === "done");
     });
     assert.match(run.summary, /收到了 \d+ 字的提示词，权限 read/, "the rule's access reaches the plugin");

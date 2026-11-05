@@ -3,7 +3,7 @@
 // detached, and the worker finds them again when it's back.
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import { SHARE_ENV, Worker } from "node:worker_threads";
 import { loadChannel } from "./channels.ts";
 import { readConfig, type ChannelConfig } from "./config.ts";
 import { HOME } from "./home.ts";
@@ -90,6 +90,8 @@ export async function up() {
       // Synchronous ACL and Job Object preparation must not starve the hub's sockets and timers.
       const worker = new Worker(new URL("../worker/thread.ts", import.meta.url), {
         workerData: { url: config.url, ...config.worker },
+        // A copied worker environment loses Windows' case-insensitive Path/SystemRoot lookup.
+        env: SHARE_ENV,
       });
       jobs.push(
         new Promise<void>((_resolve, reject) => {

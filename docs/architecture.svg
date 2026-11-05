@@ -158,6 +158,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 <text x="232" y="415" class="l" text-anchor="end">点一下，接着原对话干完</text>
 
 <!-- 底部：交付流水线 -->
+<text x="480" y="569" class="s" text-anchor="middle">Windows 外壳：计划任务启动 runner，runner 探活并重启 up；内核不负责进程看管</text>
 <rect class="plug" x="22" y="584" width="916" height="72" rx="14"/>
 <text x="40" y="614" class="h2">代码交付流水线</text>
 <text x="40" y="636" class="s">内置插件示例（事件 + Agent）</text>

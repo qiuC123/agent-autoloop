@@ -19,7 +19,11 @@ Windows 的接单程序在独立子进程里运行：设置文件权限、编译
 
 `up` 监督接单子进程：创建后 30 秒内必须完成模块加载、目录准备和旧输出清理，之后处理进度心跳不能中断超过 120 秒。心跳来自处理旧任务、交回执、领活请求返回和处理循环完成，不靠独立定时器假报存活。领活正常可等待 50 秒，请求超时再留 30 秒，失败重试暂停 30 秒；这些都容纳在心跳期限内。能完成失败处理的网络故障仍走原有重试和断联通知。
 
-超时先同步写日志，再强制结束当前 `up` 进程并返回非零状态，让已有计划任务按失败策略重启。接单子进程出错或自行退出（包括退出码 0）也让 `up` 报错退出。子进程不设置 `detached`，由 Node/libuv 的 Windows Job 随父进程关闭回收，连同它的非独立辅助进程；即使卡在同步原生调用中也不必等待 JavaScript 处理退出。正常 IPC 断开时子进程也会退出。原有 detached Agent 托管器仍独立运行，不被这层回收终止，重启按原来的日志和 worker 记录恢复。前台运行需自行重启。根因、复现命令和验证见 [Windows 接单启动调查](windows-worker-startup.md)。
+超时先同步写日志，再强制结束当前 `up` 进程并返回非零状态，由 Windows 服务 runner 恢复。接单子进程出错或自行退出（包括退出码 0）也让 `up` 报错退出。子进程不设置 `detached`，由 Node/libuv 的 Windows Job 随父进程关闭回收，连同它的非独立辅助进程；即使卡在同步原生调用中也不必等待 JavaScript 处理退出。正常 IPC 断开时子进程也会退出。原有 detached Agent 托管器仍独立运行，不被这层回收终止，重启按原来的日志和 worker 记录恢复。前台运行需自行重启。根因、复现命令和验证见 [Windows 接单启动调查](windows-worker-startup.md)。
+
+Windows 计划任务只负责启动 runner；runner 对 `up` 所有退出码按 1、2、4、8、16、32、60 秒退避重启，连续健康 5 分钟重置。它每 15 秒异步探测既有身份管道（2 秒期限），同时核对 token 和本轮子进程 PID；从启动或最后有效回应起连续 5 分钟无回应，就结束 `up` 整个进程树后重启，包含该树下独立 Agent。长任务在其他进程里，不占用 hub 事件循环。runner 忽略 Ctrl+C / Ctrl+Break，但不能抵抗系统强杀或关闭控制台的终止期限。
+
+`service stop` 通过新增的独立 service 身份管道先停止看管，再请求 `up` 正常退出；5 秒仍不退出则强杀 `up`，保留独立 Agent。退避期间同样能停止。ACL 操作改成限 5 秒的私有 .NET 辅助程序，首次编译限 30 秒，不再同步启动 PowerShell；Git 版本查询改成异步。旧任务及服务配置兼容，HTTP 与持久日志不变，升级后需 `service install` 换掉已运行的旧 runner。临时任务实测、同步调用清单和未确认的现场原因见 [Windows 服务恢复调查](windows-service-resilience.md)。
 
 **中台没有界面。** 你和它打交道靠通道和命令行。想要一个页面或大屏，用「本人」一节的几个请求自己做，它和命令行是同等的客户端。
 
@@ -256,7 +260,7 @@ POST /v1/runs/12/cancel     {}
 
 `/v1/state` 的 `spending.today`、`spending.week` 独立于分页，按规则时区的今天和过去 7 × 24 小时的完成时间汇总。每项含 `rounds`、`tokens`、`cost`、`missingTokens`、`missingCost`，后两项是没报对应用量的轮数；从未开始就取消的轮次不计入。旧请求和响应字段保持不变，旧客户端可以忽略新增字段；新版 `status` 需要中台一起更新，不再逐页读取历史来算费用。
 
-Windows 后台使用当前用户登录时启动的计划任务，`InteractiveToken`、最低权限、`IgnoreNew` 单实例、失败一分钟后重启；不存密码，不改系统 PATH。安装时保留终端 PATH，登录状态仍由 Agent 自己读取。启动日志追加到 `logs/up.log`。同一数据目录另用带随机凭据的本地命名管道拒绝第二个中台；停止通过该管道核对身份并退出，保留独立 Agent。`service remove` 删除属于当前安装的任务并停止中台；卸载保留数据。
+Windows 后台使用当前用户登录时启动的计划任务，`InteractiveToken`、最低权限、`IgnoreNew` 单实例；不存密码，不改系统 PATH。任务启动 runner，`up` 的退避重启和健康超时回收由 runner 负责，计划任务的一分钟失败重试只作额外措施。安装时保留终端 PATH，登录状态仍由 Agent 自己读取。启动日志追加到 `logs/up.log`。同一数据目录用带随机凭据的本地命名管道拒绝第二个中台和第二个 runner；`service stop` 通过独立 service 管道停止看管再停止中台，保留独立 Agent。`service remove` 删除属于当前安装的任务并停止中台；卸载保留数据。
 
 三个平台的服务安装都会保存当前 `AGENT_AUTOLOOP_RULES` 的绝对路径，未设置时不保存覆盖值，仍从数据目录读取 `rules.json`；重装会更新或移除旧覆盖值。`service install` 成功后显示规则文件位置。Windows 沿用 `service.json` 的 `agentHomes`，已有手动写入的 `AGENT_AUTOLOOP_RULES` 仍有效。
 

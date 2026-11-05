@@ -11,7 +11,7 @@ import { settings, matches, releaseRequired, readMainSettings, liveRelease } fro
 const root = mkdtempSync(join(tmpdir(), "agent-autoloop-delivery-scope-"));
 after(() => rmSync(root, { recursive: true, force: true }));
 const git = (...args: string[]) =>
-  execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  execFileSync("git", args, { timeout: 30_000, cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const write = (name: string, text: string) => {
   mkdirSync(join(root, name, ".."), { recursive: true });
   writeFileSync(join(root, name), text);

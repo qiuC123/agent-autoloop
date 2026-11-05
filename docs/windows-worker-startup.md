@@ -1,5 +1,7 @@
 # Windows 接单启动调查
 
+后续服务恢复已改由 runner 看管，不再依赖本文原先描述的计划任务失败重启；ACL 也已去掉 PowerShell。下文保留当时的调查证据，当前行为见 [Windows 服务恢复调查](windows-service-resilience.md)。
+
 根因是同一进程内跨线程创建子进程时的 Windows 管道句柄继承竞争。`up` 改用接单子进程，隔离句柄表，同时保留启动和进度监督。
 
 ## 根因与证据

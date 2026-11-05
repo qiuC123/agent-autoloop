@@ -1,11 +1,17 @@
-// The scheduled task runs with the logged-in user's token; only Task Scheduler calls are injectable.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+// Task Scheduler starts the runner at login; the runner owns recovery and has its own authenticated stop channel.
+import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync, writeSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { privateDirectory, writePrivateFile } from "./private.ts";
+import { windowsUserSid } from "./windows-acl.ts";
+import { listenForControl, requestControl } from "./windows-control.ts";
 
-type Command = (program: string, args: string[]) => { status: number | null; stdout: string; stderr?: string };
+type Command = (
+  program: string,
+  args: string[],
+) => { status: number | null; stdout: string; stderr?: string; error?: Error };
 type Options = {
   home: string;
   user?: string;
@@ -18,7 +24,8 @@ type Options = {
 const escape = (text: string) =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 const quote = (text: string) => '"' + text.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1") + '"';
-const execute: Command = (program, args) => spawnSync(program, args, { encoding: "utf8", windowsHide: true });
+const execute: Command = (program, args) =>
+  spawnSync(program, args, { encoding: "utf8", windowsHide: true, timeout: 30_000 });
 
 function only(xml: string, name: string) {
   const elements = [...xml.matchAll(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}\\s*>`, "g"))];
@@ -47,18 +54,7 @@ export function windowsService(options: Options) {
   const taskFile = path.join(home, "service-task.xml");
   const configFile = path.join(home, "service.json");
   let owner = options.user;
-  const user = () =>
-    (owner ??= execFileSync(
-      "powershell.exe",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-      ],
-      { encoding: "utf8", windowsHide: true },
-    ).trim());
+  const user = () => (owner ??= windowsUserSid());
   const xml = () => `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>agent-autoloop ${escape(program)}</Description></RegistrationInfo>
@@ -117,6 +113,7 @@ export function windowsService(options: Options) {
     queryCommand,
     install() {
       const registered = query();
+      if (registered.error) throw registered.error;
       if (registered.status === 0 && !owned(registered.stdout)) throw new Error(`同名计划任务不是本程序：${name}`);
       privateDirectory(home);
       privateDirectory(path.join(home, "logs"));
@@ -148,21 +145,101 @@ export function windowsService(options: Options) {
   };
 }
 
-if (import.meta.main) {
-  const { home, node, program, searchPath, agentHomes } = JSON.parse(readFileSync(process.argv[2], "utf8"));
-  const log = openSync(path.join(home, "logs", "up.log"), "a");
-  const child = spawn(node, ["--disable-warning=ExperimentalWarning", program, "up"], {
+type Configuration = { home: string; node: string; program: string; searchPath: string; agentHomes: NodeJS.ProcessEnv };
+
+export function launchServiceUp({ home, node, program, searchPath, agentHomes }: Configuration, log: number) {
+  return spawn(node, ["--disable-warning=ExperimentalWarning", program, "up"], {
     env: { ...process.env, ...agentHomes, AGENT_AUTOLOOP_HOME: home, PATH: searchPath },
     cwd: home,
     windowsHide: true,
     stdio: ["ignore", log, log],
   });
-  closeSync(log);
-  child.on("error", (error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
-  child.on("exit", (code) => {
-    process.exitCode = code ?? 1;
+}
+
+async function killTree(child: ChildProcess) {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+      ["/PID", String(child.pid), "/T", "/F"],
+      { windowsHide: true, timeout: 15_000 },
+      (error) => {
+        if (error && child.exitCode === null && child.signalCode === null) reject(error);
+        else resolve();
+      },
+    );
   });
 }
+
+export async function runWindowsService(configuration: Configuration) {
+  const { home } = configuration;
+  const stop = new AbortController();
+  const ignore = () => {};
+  for (const signal of ["SIGINT", "SIGBREAK"] as const) process.on(signal, ignore);
+  const unlock = await listenForControl(home, () => stop.abort(), "service");
+  const log = openSync(path.join(home, "logs", "up.log"), "a");
+  const say = (message: string) => writeSync(log, `${new Date().toISOString()} [service] ${message}\n`);
+  const wait = (ms: number) => delay(ms, undefined, { signal: stop.signal }).catch(() => {});
+  let failures = 0;
+  try {
+    while (!stop.signal.aborted) {
+      const child = launchServiceUp(configuration, log);
+      let ended = false;
+      const exited = new Promise<void>((resolve) => {
+        const finish = (reason: string) => {
+          if (ended) return;
+          ended = true;
+          say(`up 退出：${reason}`);
+          resolve();
+        };
+        child.once("error", (error) => finish(error.message));
+        child.once("exit", (code, signal) => finish(String(code ?? signal)));
+      });
+      let lastHealthy = performance.now();
+      let healthySince: number | undefined;
+      while (!ended && !stop.signal.aborted) {
+        await Promise.race([exited, wait(15_000)]);
+        if (ended || stop.signal.aborted) break;
+        const healthy = await requestControl(home, "status", "up", child.pid);
+        if (ended || stop.signal.aborted) break;
+        const now = performance.now();
+        if (healthy !== null) {
+          lastHealthy = now;
+          healthySince ??= now;
+          if (now - healthySince >= 300_000) failures = 0;
+        } else {
+          healthySince = undefined;
+          // Agent work is in other processes; even a long turn must leave the local control loop responsive.
+          if (now - lastHealthy >= 300_000) {
+            say("up 连续 5 分钟没有回应，结束进程树后重启");
+            try {
+              await killTree(child);
+            } catch (error) {
+              say(`结束进程树失败：${error}`);
+            }
+          }
+        }
+      }
+      if (stop.signal.aborted) {
+        say("收到 service stop，停止看管");
+        if (!ended) {
+          await requestControl(home, "stop", "up", child.pid);
+          await Promise.race([exited, delay(5_000, undefined, { ref: false })]);
+          // Normal stop preserves detached Agents, just as foreground up does.
+          if (!ended) child.kill("SIGKILL");
+          await exited;
+        }
+        break;
+      }
+      const backoff = Math.min(60_000, 1_000 * 2 ** Math.min(failures++, 6));
+      say(`将在 ${backoff} 毫秒后重启 up`);
+      await wait(backoff);
+    }
+  } finally {
+    unlock();
+    closeSync(log);
+    for (const signal of ["SIGINT", "SIGBREAK"] as const) process.off(signal, ignore);
+  }
+}
+
+if (import.meta.main) await runWindowsService(JSON.parse(readFileSync(process.argv[2], "utf8")));

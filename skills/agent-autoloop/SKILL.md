@@ -33,7 +33,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台是当前用户登录时启动的计划任务，保留安装终端的 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保留任务只停中台，`service remove` 再删任务；独立 Agent 保留供重启认领；`stop <轮次>` 才会结束该轮整个 Job 进程树。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
 
-Windows 的接单程序由 `up` 托管为子进程，初始化限时 30 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出，交给已有计划任务重启。接单子进程随中台回收，独立 Agent 留给恢复。前台 `up` 需自行重启。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活。
+Windows 的接单程序由 `up` 托管为子进程，初始化限时 30 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应就结束整树并重启，不依赖计划任务重试。`service stop` 先停止看管，保留独立 Agent；健康超时回收整树。ACL 用限时原生辅助程序，不同步启动 PowerShell。升级后运行一次 `service install` 替换旧 runner。前台 `up` 需自行重启。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
 
 ## 写处理手册
 

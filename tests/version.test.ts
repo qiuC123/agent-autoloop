@@ -8,13 +8,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { commitOf } from "../host/version.ts";
+import { nativeCommand } from "./native-command.ts";
+import { delimiter } from "node:path";
 
 const root = join(import.meta.dirname, "..");
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-version-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+    timeout: 30_000,
+    cwd,
+    encoding: "utf8",
+  }).trim();
 
 test("it prints package.json's version and this checkout's commit, with nothing installed", () => {
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -24,7 +30,7 @@ test("it prints package.json's version and this checkout's commit, with nothing 
   const done = spawnSync(
     process.execPath,
     ["--disable-warning=ExperimentalWarning", join(root, "bin", "agent-autoloop.ts"), "--version"],
-    { env, encoding: "utf8" },
+    { timeout: 30_000, env, encoding: "utf8" },
   );
   assert.equal(done.status, 0, done.stderr);
   const commit = git(root, "rev-parse", "HEAD").slice(0, 12);
@@ -32,7 +38,7 @@ test("it prints package.json's version and this checkout's commit, with nothing 
   assert.ok(!existsSync(empty), "asking the version sets nothing up");
 });
 
-test("a commit reads the same whether its ref is a file or packed away, and a deployment's word counts", () => {
+test("a commit reads the same whether its ref is a file or packed away, and a deployment's word counts", async () => {
   const before = process.env.AGENT_AUTOLOOP_COMMIT;
   delete process.env.AGENT_AUTOLOOP_COMMIT;
   const clone = join(dir, "clone");
@@ -42,17 +48,40 @@ test("a commit reads the same whether its ref is a file or packed away, and a de
   git(clone, "add", "file");
   git(clone, "commit", "-qm", "x");
   const head = git(clone, "rev-parse", "HEAD");
-  assert.equal(commitOf(clone), head);
+  assert.equal(await commitOf(clone), head);
   git(clone, "pack-refs", "--all");
   assert.ok(!existsSync(join(clone, ".git", "refs", "heads", "main")));
-  assert.equal(commitOf(clone), head);
+  assert.equal(await commitOf(clone), head);
 
   mkdirSync(join(clone, "vendored"));
-  assert.equal(commitOf(join(clone, "vendored")), "dev", "a copy inside a repository isn't at its commit");
-  assert.equal(commitOf(join(dir, "no-such-folder")), "dev");
+  assert.equal(await commitOf(join(clone, "vendored")), "dev", "a copy inside a repository isn't at its commit");
+  assert.equal(await commitOf(join(dir, "no-such-folder")), "dev");
 
   process.env.AGENT_AUTOLOOP_COMMIT = "deployed";
-  assert.equal(commitOf(clone), "deployed");
+  assert.equal(await commitOf(clone), "deployed");
   if (before === undefined) delete process.env.AGENT_AUTOLOOP_COMMIT;
   else process.env.AGENT_AUTOLOOP_COMMIT = before;
+});
+
+test("reading the health version leaves the hub event loop responsive during Git", async () => {
+  const commands = join(dir, "commands");
+  mkdirSync(commands);
+  nativeCommand(join(commands, "git"), "setTimeout(()=>console.log('test-commit'),250);");
+  const oldPath = process.env.PATH;
+  const oldCommit = process.env.AGENT_AUTOLOOP_COMMIT;
+  delete process.env.AGENT_AUTOLOOP_COMMIT;
+  process.env.PATH = commands + delimiter + oldPath;
+  let ticked = false;
+  const timer = setTimeout(() => {
+    ticked = true;
+  }, 10);
+  try {
+    assert.equal(await commitOf(root), "test-commit");
+    assert.equal(ticked, true, "Git must not block hub timers");
+  } finally {
+    clearTimeout(timer);
+    process.env.PATH = oldPath;
+    if (oldCommit === undefined) delete process.env.AGENT_AUTOLOOP_COMMIT;
+    else process.env.AGENT_AUTOLOOP_COMMIT = oldCommit;
+  }
 });

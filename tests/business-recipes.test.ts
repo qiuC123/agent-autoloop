@@ -116,6 +116,7 @@ console.log(JSON.stringify({ok:true,identity:'user',data}));
     process.execPath,
     [join(import.meta.dirname, "../examples/recipes/feishu-brief/collect.ts"), "sources.json"],
     {
+      timeout: 30_000,
       cwd: dir,
       encoding: "utf8",
       env: {

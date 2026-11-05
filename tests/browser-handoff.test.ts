@@ -35,6 +35,7 @@ process.exit(Number(process.env.BRIDGE_EXIT || 0));
   writeFileSync(join(dir, "browser.json"), JSON.stringify(task));
   const run = (args: string[] = [], code = 0) =>
     spawnSync(process.execPath, ["handoff.ts", "browser.json", ...args], {
+      timeout: 30_000,
       cwd: dir,
       encoding: "utf8",
       env: { ...process.env, BRIDGE_EXIT: String(code) },

@@ -12,7 +12,7 @@ test("PowerShell installer is parseable without executing it", { skip: process.p
   const result = spawnSync(
     "powershell.exe",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { encoding: "utf8", windowsHide: true },
+    { timeout: 30_000, encoding: "utf8", windowsHide: true },
   );
   assert.equal(result.status, 0, result.stderr);
 });
@@ -25,7 +25,7 @@ test("PowerShell 5.1 passes the Node version check to node intact", { skip: proc
   const result = spawnSync(
     "powershell.exe",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { encoding: "utf8", windowsHide: true },
+    { timeout: 30_000, encoding: "utf8", windowsHide: true },
   );
   assert.equal(result.status, 0, result.stderr);
 });

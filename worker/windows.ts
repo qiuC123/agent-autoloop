@@ -33,14 +33,14 @@ function helper() {
 }
 
 export function windowsAlive(name: string, spec: string) {
-  const result = spawnSync(helper(), ["query", name, spec], { windowsHide: true, encoding: "utf8" });
+  const result = spawnSync(helper(), ["query", name, spec], { timeout: 30_000, windowsHide: true, encoding: "utf8" });
   if (result.status === 3) return false;
   if (result.status !== 0) throw new Error(`检查 Windows 进程失败：${result.error?.message ?? result.stderr}`);
   return true;
 }
 
 export function windowsStop(name: string, spec: string) {
-  const result = spawnSync(helper(), ["stop", name, spec], { windowsHide: true, encoding: "utf8" });
+  const result = spawnSync(helper(), ["stop", name, spec], { timeout: 30_000, windowsHide: true, encoding: "utf8" });
   if (result.status !== 0 && result.status !== 3)
     throw new Error(`停止 Windows 进程失败：${result.error?.message ?? result.stderr}`);
 }

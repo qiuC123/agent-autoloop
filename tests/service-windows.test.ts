@@ -1,17 +1,26 @@
 // Prevents losing custom rules or PATH, registering a machine-wide task, executing paths as code, or removing another task.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { windowsService } from "../host/windows-service.ts";
+import { launchServiceUp, windowsService } from "../host/windows-service.ts";
 
 const directory = mkdtempSync(path.join(tmpdir(), "agent-autoloop-service-"));
 after(() => rmSync(directory, { recursive: true, force: true }));
 
-test("Windows install captures current rules, updates them and removes them on reinstall; runner uses the saved path", () => {
+test("Windows install captures current rules, updates them and removes them on reinstall; runner uses the saved path", async () => {
   const home = path.join(directory, "rules service");
   const program = path.join(home, "engine.mjs");
   const service = windowsService({
@@ -36,18 +45,15 @@ console.log(JSON.stringify({ rules: process.env.AGENT_AUTOLOOP_RULES, file: RULE
       );
       const log = path.join(home, "logs", "up.log");
       writeFileSync(log, "");
-      const env = { ...process.env };
-      delete env.AGENT_AUTOLOOP_RULES;
-      const result = spawnSync(
-        process.execPath,
-        [path.resolve(import.meta.dirname, "../host/windows-service.ts"), service.configFile],
-        {
-          env,
-          encoding: "utf8",
-          timeout: 10_000,
-        },
-      );
-      assert.equal(result.status, 0, result.stderr);
+      delete process.env.AGENT_AUTOLOOP_RULES;
+      const fd = openSync(log, "a");
+      const launched = launchServiceUp(config, fd);
+      closeSync(fd);
+      const status = await new Promise((resolve, reject) => {
+        launched.once("exit", resolve);
+        launched.once("error", reject);
+      });
+      assert.equal(status, 0);
       const child = JSON.parse(readFileSync(log, "utf8"));
       assert.equal(child.rules, rules === undefined ? undefined : path.resolve(rules));
       assert.equal(child.file, rules === undefined ? path.join(home, "rules.json") : path.resolve(rules));
@@ -129,6 +135,20 @@ test("Windows remove only deletes the matching task and leaves another task unto
   assert.ok(!calls.some((args) => args[0] === "/End"), "normal service stop must preserve detached agents");
 });
 
+test("a timed-out task ownership query must not overwrite an existing task", () => {
+  const calls: string[] = [];
+  const service = windowsService({
+    home: path.join(directory, "unknown-ownership"),
+    user: "S-1-5-21-123",
+    run: (program) => {
+      calls.push(program);
+      return { status: null, stdout: "", error: Object.assign(new Error("query timed out"), { code: "ETIMEDOUT" }) };
+    },
+  });
+  assert.throws(() => service.install(), /query timed out/);
+  assert.deepEqual(calls, ["powershell.exe"]);
+});
+
 test("Windows service names distinguish data directories, and launcher arguments are literal", () => {
   const first = windowsService({ home: path.join(directory, 'quote " & $()'), user: "S-1-5-21-123" });
   const second = windowsService({ home: path.join(directory, "second"), user: "S-1-5-21-123" });
@@ -200,7 +220,7 @@ test("Windows task readback preserves Unicode paths and accepts standard XML ent
   assert.deepEqual(calls.at(-1), ["/Delete", "/TN", service.name, "/F"]);
 });
 
-test("Windows task launcher preserves PATH and login directories, logs both streams and returns the engine status", () => {
+test("Windows engine launch preserves PATH and login directories, logs both streams and exposes the exit status to supervision", async () => {
   const target = path.join(directory, "runner target 中文 & space");
   mkdirSync(path.join(target, "logs"), { recursive: true });
   const home = path.join(directory, "runner 中文 & space");
@@ -221,12 +241,14 @@ test("Windows task launcher preserves PATH and login directories, logs both stre
       agentHomes: { CODEX_HOME: "test login directory", AGENT_AUTOLOOP_RULES: path.join(home, "旧规则 & space.json") },
     }),
   );
-  const result = spawnSync(
-    process.execPath,
-    [path.join(import.meta.dirname, "..", "host", "windows-service.ts"), configuration],
-    { encoding: "utf8" },
-  );
-  assert.equal(result.status, 7, result.stderr);
+  const fd = openSync(path.join(home, "logs", "up.log"), "a");
+  const launched = launchServiceUp(JSON.parse(readFileSync(configuration, "utf8")), fd);
+  closeSync(fd);
+  const status = await new Promise((resolve, reject) => {
+    launched.once("exit", resolve);
+    launched.once("error", reject);
+  });
+  assert.equal(status, 7);
   const lines = readFileSync(path.join(home, "logs", "up.log"), "utf8")
     .trim()
     .split(/\r?\n/);

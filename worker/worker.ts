@@ -113,7 +113,10 @@ function alive(entry: Entry) {
     return !!entry.windowsJob && windowsAlive(entry.windowsJob, `${files(entry).exit}.launch`);
   if (!entry.pid) return false;
   try {
-    const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], { encoding: "utf8" });
+    const command = execFileSync("ps", ["-p", String(entry.pid), "-o", "command="], {
+      timeout: 30_000,
+      encoding: "utf8",
+    });
     return command.includes(marker(entry));
   } catch {
     return false;
@@ -133,7 +136,7 @@ function signal(entry: Entry, name: NodeJS.Signals) {
 function groupAlive(entry: Entry) {
   if (process.platform === "win32") return alive(entry);
   // The wrapper can die before a child; zombies have already stopped and only their parent can reap them.
-  return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
+  return execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { timeout: 30_000, encoding: "utf8" })
     .trim()
     .split("\n")
     .some((line) => {

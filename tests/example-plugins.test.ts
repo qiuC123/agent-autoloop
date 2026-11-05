@@ -36,6 +36,7 @@ const cleanEnv = () =>
   ) as NodeJS.ProcessEnv;
 const agentAutoloop = (args: string[], home: string) =>
   spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", CLI, ...args], {
+    timeout: 30_000,
     env: { ...cleanEnv(), AGENT_AUTOLOOP_HOME: home },
     encoding: "utf8",
   });
@@ -168,7 +169,7 @@ function repository(name: string, file: string) {
   mkdirSync(dir, { recursive: true });
   cpSync(join(ROOT, "examples", "plugins", name, file), join(dir, file));
   const git = (...args: string[]) => {
-    const done = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    const done = spawnSync("git", args, { timeout: 30_000, cwd: dir, encoding: "utf8" });
     assert.equal(done.status, 0, done.stderr);
   };
   git("init", "-q");
@@ -233,10 +234,7 @@ import { syncBuiltinESMExports } from "node:module";
 const original = cp.execFileSync;
 let delayed = false;
 cp.execFileSync = function (file, args, ...rest) {
-  const index = args?.indexOf("-EncodedCommand");
-  const script = index >= 0 ? Buffer.from(args[index + 1], "base64").toString("utf16le") : "";
-  const encoded = /FromBase64String\\('([^']+)'\\)/.exec(script)?.[1];
-  const target = encoded ? Buffer.from(encoded, "base64").toString().replaceAll("\\\\", "/") : "";
+  const target = String(args?.[0] ?? "").replaceAll("\\\\", "/");
   if (!delayed && target.includes("/worker/runs/")) {
     delayed = true;
     writeFileSync(${JSON.stringify(preparing)}, "ready");

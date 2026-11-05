@@ -16,7 +16,7 @@ function rules(file: string, directory = false): { sid: string; rights: number }
   const output = execFileSync(
     join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe"),
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(code, "utf16le").toString("base64")],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    { timeout: 30_000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
   const parsed = JSON.parse(output);
   return Array.isArray(parsed) ? parsed : [parsed];

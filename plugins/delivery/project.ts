@@ -84,7 +84,11 @@ export const matches = (name: string, patterns: string[]) =>
   patterns.some((pattern) => globToRegExp(pattern).test(name));
 
 export function releaseRequired(root: string, base: string, head: string, patterns: string[]) {
-  const isAncestor = spawnSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: root, stdio: "ignore" });
+  const isAncestor = spawnSync("git", ["merge-base", "--is-ancestor", base, head], {
+    timeout: 30_000,
+    cwd: root,
+    stdio: "ignore",
+  });
   if (isAncestor.status !== 0) return true;
   const records = git(
     root,

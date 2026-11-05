@@ -250,7 +250,7 @@ syncBuiltinESMExports();`,
   const preloadArgs = process.platform === "win32" ? ["--import", pathToFileURL(preload).href] : [];
   const env = cleanEnv();
   if (process.platform === "win32") {
-    // Windows accepts Path as PATH; a worker thread's default environment copy does not.
+    // Worker isolation must preserve Windows' case-insensitive environment lookup.
     for (const name of Object.keys(env)) if (name.toLowerCase() === "path") delete env[name];
     env.Path = process.env.PATH;
   }

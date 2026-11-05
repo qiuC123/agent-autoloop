@@ -1,5 +1,5 @@
 // Failure modes: startup or work stalls silently; native blocking prevents exit; healthy progress is killed;
-// a clean thread exit or an uncaught exception leaves the hub running without a worker.
+// a clean worker exit or an uncaught exception leaves the hub running without a worker.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -28,16 +28,15 @@ for (const fault of ["loading", "preparation", "native", "poll", "healthy", "ret
     writeFileSync(
       preload,
       `
-      import { isMainThread } from 'node:worker_threads';
       import cp from 'node:child_process';
       import { registerHooks, syncBuiltinESMExports } from 'node:module';
       const fault = ${JSON.stringify(fault)};
-      if (isMainThread) {
+      if (!process.argv[1]?.replaceAll('\\\\', '/').endsWith('/worker/process.ts')) {
         const original = globalThis.setTimeout;
         globalThis.setTimeout = (fn, ms, ...args) => original(fn, ms === 30000 || ms === 120000 ? 5000 : ms, ...args);
       } else {
         if (fault === 'loading') registerHooks({ load(url, context, next) {
-          if (url.endsWith('/worker/thread.ts')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+          if (url.endsWith('/worker/process.ts')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
           return next(url, context);
         }});
         if (fault === 'preparation') {
@@ -94,8 +93,8 @@ for (const fault of ["loading", "preparation", "native", "poll", "healthy", "ret
         fault === "error"
           ? /synthetic worker failure/
           : fault === "exit"
-            ? /接单线程退出/
-            : /接单线程.*(启动|心跳).*超时/,
+            ? /接单进程退出/
+            : /接单进程.*(启动|心跳).*超时/,
       );
     } finally {
       if (existsSync(nativePid)) {

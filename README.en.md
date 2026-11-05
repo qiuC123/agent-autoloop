@@ -38,7 +38,7 @@ Windows uses a scheduled task triggered when the current user signs in, without 
 
 On Windows, the Codex plugin probes the actual sandbox user SID with the current `codex sandbox` configuration. Only the turn's `agent/` data directory is shared: read access for `read`, read/write for the default `edit`. Hub databases, keys, configuration and worker control records remain owner-only. No user group is granted access, and the plugin never switches to `full`.
 
-On Windows, if the embedded worker does not initialize within 30 seconds or stops making progress for 120 seconds, `up` logs the reason and exits nonzero so the scheduled task can restart it. Detached agents remain available for recovery. Foreground runs need a manual restart; see the [protocol](docs/protocol.md).
+On Windows, `up` runs its worker in a child process, isolating synchronous commands from the hub event loop and channel child-process handles. If the worker does not initialize within 30 seconds or stops making progress for 120 seconds, `up` logs the reason and exits nonzero so the scheduled task can restart it. The worker child is reaped with `up`; detached agents remain available for recovery. Foreground runs need a manual restart; see the [protocol](docs/protocol.md).
 
 On all three platforms, `agent-autoloop service install` remembers a custom rules path set with `AGENT_AUTOLOOP_RULES` and prints its absolute path; reinstall after changing or unsetting the variable to update the service.
 

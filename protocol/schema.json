@@ -436,6 +436,9 @@
             "prompt": {
               "type": "string"
             },
+            "ask": {
+              "type": "boolean"
+            },
             "emits": {
               "type": "object",
               "properties": {

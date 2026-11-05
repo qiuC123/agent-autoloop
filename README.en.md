@@ -108,6 +108,8 @@ External events work the same way once the source is connected. To hand new GitH
 
 Changes take effect within seconds of saving. Run `agent-autoloop check` to validate. If you make a mistake, the hub keeps running the previous valid rules and sends you a card pointing out the error.
 
+Set `"ask": false` on a rule to forbid question cards: the engine rejects each receipt `ask` while applying other fields normally. Explain owner decisions with `notice` or emit an event permitted by the rule. Omitting `ask` or setting it to `true` preserves existing behavior; existing cards and answers are unchanged.
+
 ### How agents talk back to the hub
 
 The hub asks only one thing of an agent: **put your result in your final message**. When the job is done, a one-line conclusion is enough. To ask you something, the agent appends an `agent-autoloop` block:

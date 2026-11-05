@@ -64,7 +64,11 @@
 
 `elsewhere` 是在别处定时跑的任务：中台不启动它们，只在 `agent-autoloop status` 里列出来，它们要找你时用 `POST /v1/tell`。规则写错了，文件改动不生效，旧规则继续跑，并推一张卡片告诉你错在哪。
 
-排队和等待重试的任务在领取时一起采用最新的 Agent、目录、提示词和权限；换了 Agent 就不带旧 Agent 的会话。已经领取的任务保留领取时的 Job 配置和接单程序，重复 claim、心跳、停止和重启恢复都不随规则更新换人。事件已经归属的事项不重新拆分或合并；回执中的事件许可和通知方式仍按提交时的规则核验。
+规则可写 `"ask": false` 禁止新建提问卡片；只接受布尔值，不写或 `true` 保持原行为。回执中每个 `ask` 都会被拒绝并记入 `rejected`（`what: "ask"`），`notice`、`events`、`resolve`、`later` 照常处理。需要本人决定的事用 `notice` 说明或按规则交出事件。此开关不关闭旧卡片，也不清除已有回答或会话。
+
+Rule field `ask` is an optional boolean: `false` rejects each receipt question without creating a card; omitted or `true` preserves existing behavior. Other receipt fields still apply. Existing cards, answers and sessions are unchanged.
+
+排队和等待重试的任务在领取时一起采用最新的 Agent、目录、提示词和权限；换了 Agent 就不带旧 Agent 的会话。已经领取的任务保留领取时的 Job 配置和接单程序，重复 claim、心跳、停止和重启恢复都不随规则更新换人。事件已经归属的事项不重新拆分或合并；回执中的提问许可、事件许可和通知方式仍按提交时的规则核验。
 
 工作目录接受 Unix 绝对路径、`~/`，以及 Windows 盘符绝对路径（`C:/work`、`C:\work`）、UNC（`\\server\share\work`）和 `~\`；拒绝 `C:work`、`\work` 等含糊的相对路径。HTTP 字段不变，目录仍由可信规则指定。
 
@@ -127,6 +131,8 @@ GET /v1/work?claim=<这次领活的编号>&wait=50&running=7,8&capacity=1    Aut
 }
 ```
 
+`Job.rule.ask` 是可选布尔值，供接单程序按领取时的规则生成提示；不写时保持旧提示原文。新增字段不改变缺省规则的 Job JSON，旧接单程序即使仍提示提问，内核也会拒绝禁用规则的 `ask`。
+
 ```
 POST /v1/runs/12/started   Authorization: Bearer <token>   { "session": "…", "link": "claude://…" }
 POST /v1/runs/12/result    Authorization: Bearer <token>   Result
@@ -159,6 +165,8 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
 - `resolve` 只能结同来源、同组、这一轮领活前就有的卡片，越界的写进 `rejected`，不影响这一轮的结果。
 - `later` 的 `key` 范围是这个事项，同一个 `key` 再写一次就是改时间。
 - `events` 的来源由规则的 `emits` 决定，回执改不了。
+
+以上需要提问的说明只适用于允许 `ask` 的规则；`ask: false` 时改用 `notice` 或规则允许的事件，不能自行执行需要本人决定的事。
 
 ### Agent 只需要做一件事
 

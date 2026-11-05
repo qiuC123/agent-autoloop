@@ -355,7 +355,10 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
     if (card) closeCard(draft, card, item.reason.trim(), `第 ${id} 轮`);
     else rejected.push({ card: item.card, reason: "不在本轮核对范围" });
   }
-  for (const ask of result.ask ?? []) cardFromReceipt(draft, run, "ask", ask);
+  for (const ask of result.ask ?? []) {
+    if (rule?.ask === false) rejected.push({ what: "ask", reason: `规则「${run.rule}」不能发 ask` });
+    else cardFromReceipt(draft, run, "ask", ask);
+  }
   for (const notice of result.notice ?? []) cardFromReceipt(draft, run, "notice", notice);
   if (rule?.tell === "always" && result.outcome === "done") {
     const once = { fyi: true, once: true, ...threadOf(run), source: sourceOf(draft.view, id), run: id };

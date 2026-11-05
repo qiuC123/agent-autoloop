@@ -26,6 +26,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 - 同一个对象的事件要分开处理、互不等待，就写 `parallel`。
 - 默认的先问清单是 `askFirst`，用户说什么事必须先问他，就改这里。
+- 规则写 `"ask": false` 就不能发提问卡片，回执里的每个 `ask` 都被拒绝，其他内容照常生效；不写或 `true` 保持原行为。需要本人决定的事用 `notice` 说明或按规则交出事件，不能自行执行；下文提问说明只适用于允许 `ask` 的规则。已有卡片、回答和会话不清除。
 - 用户在别的地方定时跑的任务（Claude、Codex 应用里），写进 `elsewhere`，只在 `agent-autoloop status` 里列出来；它们要找用户时运行 `agent-autoloop tell <编号> --task <任务名>`，内容从标准输入传。
 
 现成场景和内置插件从 [README](../../README.md#拿来即用的场景模板)进入，开发示例见[写插件](../../docs/plugins.md)。用户想接自动化时先从例子改，不要从零写：`examples/recipes/` 里有早报（`morning-brief`）、处理 GitHub issue（`github-issues`）、线上报错（`ops-alerts`）、反馈处理（`feedback`）、网站巡检（`website-watch`）、飞书周报与业务摘要（`feishu-brief`）和 Claude 浏览器交接（`browser-handoff`），每个都有规则、Skill 和写明权限原因的 README。反馈、巡检、飞书摘要和浏览器交接默认飞书本人私聊；按模板说明替换虚构标识，业务资料留在私有目录，读取用本人身份，通知用机器人身份。要写新的 Agent、通道或事件插件，看教程 `docs/plugins.md` 和最小例子 `examples/plugins/`。

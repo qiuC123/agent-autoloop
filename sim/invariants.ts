@@ -83,6 +83,12 @@ export function invariants(current: View, log: Fact[], before?: Snapshot, input?
         assert.equal(card.content_version, card.version, "内容版本没有跟随更新");
       }
     }
+    for (const card of cards.filter((c) => c.kind === "ask" && !before.tables.cards[c.id]))
+      assert.notEqual(
+        before.tables.config.rules?.value.rules.find((r: Row) => r.name === card.rule)?.ask,
+        false,
+        "禁止提问的规则建了 ask 卡片",
+      );
     for (const e of rows(before, "events")) assert.deepEqual(view.tables.events[e.id], e, "已落盘事件被改了或丢了");
     for (const c of rows(before, "cards"))
       if (c.answer_event !== null) {

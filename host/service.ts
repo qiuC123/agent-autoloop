@@ -7,6 +7,7 @@ import path from "node:path";
 import { HOME } from "./home.ts";
 import { controlUp } from "./windows-control.ts";
 import { windowsService } from "./windows-service.ts";
+import { writePrivateFile } from "./private.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
@@ -67,7 +68,7 @@ WantedBy=default.target
 
 const domain = () => `gui/${process.getuid!()}`;
 const launchdHasIt = () =>
-  spawnSync("launchctl", ["print", `${domain()}/${label()}`], { stdio: "ignore" }).status === 0;
+  spawnSync("launchctl", ["print", `${domain()}/${label()}`], { timeout: 30_000, stdio: "ignore" }).status === 0;
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 export function installService() {
@@ -80,16 +81,16 @@ export function installService() {
   if (process.platform === "darwin") {
     mkdirSync(path.dirname(plistFile()), { recursive: true });
     writeFileSync(plistFile(), plist());
-    spawnSync("launchctl", ["bootout", `${domain()}/${label()}`], { stdio: "ignore" });
+    spawnSync("launchctl", ["bootout", `${domain()}/${label()}`], { timeout: 30_000, stdio: "ignore" });
     // bootout returns before the old one is gone; loading before that fails and leaves none.
     for (let tries = 0; tries < 100 && launchdHasIt(); tries++) pause(100);
-    execFileSync("launchctl", ["bootstrap", domain(), plistFile()]);
+    execFileSync("launchctl", ["bootstrap", domain(), plistFile()], { timeout: 30_000 });
   } else {
     mkdirSync(path.dirname(unitFile()), { recursive: true });
     writeFileSync(unitFile(), unit());
-    execFileSync("systemctl", ["--user", "daemon-reload"]);
-    execFileSync("systemctl", ["--user", "enable", "--now", label()]);
-    execFileSync("systemctl", ["--user", "restart", label()]);
+    execFileSync("systemctl", ["--user", "daemon-reload"], { timeout: 30_000 });
+    execFileSync("systemctl", ["--user", "enable", "--now", label()], { timeout: 30_000 });
+    execFileSync("systemctl", ["--user", "restart", label()], { timeout: 30_000 });
   }
 }
 
@@ -102,10 +103,10 @@ export function removeService() {
   const file = process.platform === "darwin" ? plistFile() : unitFile();
   if (!existsSync(file) || !readFileSync(file, "utf8").includes(xml(PROGRAM))) return;
   if (process.platform === "darwin") {
-    spawnSync("launchctl", ["bootout", `${domain()}/${label()}`], { stdio: "ignore" });
+    spawnSync("launchctl", ["bootout", `${domain()}/${label()}`], { timeout: 30_000, stdio: "ignore" });
     rmSync(plistFile(), { force: true });
   } else {
-    spawnSync("systemctl", ["--user", "disable", "--now", label()], { stdio: "ignore" });
+    spawnSync("systemctl", ["--user", "disable", "--now", label()], { timeout: 30_000, stdio: "ignore" });
     rmSync(unitFile(), { force: true });
   }
 }
@@ -119,6 +120,7 @@ export function runningUp() {
   let command = "";
   try {
     command = execFileSync("ps", ["-p", pid, "-o", "command="], {
+      timeout: 30_000,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -129,6 +131,14 @@ export function runningUp() {
 /** Stopping a service returns before its process is gone, and one started by hand has no service to stop it. */
 export function stopUp() {
   if (process.platform === "win32") {
+    if (existsSync(HOME)) writePrivateFile(path.join(HOME, "service.stopped"), "");
+    if (controlUp(HOME, "stop", "service") !== null) {
+      const deadline = Date.now() + 10_000;
+      while (controlUp(HOME, "status", "service") !== null) {
+        if (Date.now() >= deadline) throw new Error("服务看管进程还没停止，请稍后重试");
+        pause(100);
+      }
+    }
     if (controlUp(HOME, "stop") === null) return;
     for (let tries = 0; tries < 50 && runningUp() !== null; tries++) pause(100);
     return;
@@ -144,5 +154,8 @@ export function stopUp() {
 export function serviceRunning() {
   if (process.platform === "win32") return windowsService({ home: HOME }).installed() && runningUp() !== null;
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
-  return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
+  return (
+    spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { timeout: 30_000, stdio: "ignore" }).status ===
+    0
+  );
 }

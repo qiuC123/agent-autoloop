@@ -65,7 +65,7 @@ public static class Launcher {
     execFileSync(
       join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe"),
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", compile, code, launcher],
-      { windowsHide: true, stdio: "pipe" },
+      { timeout: 30_000, windowsHide: true, stdio: "pipe" },
     );
   }
   const executable = `${file}.exe`;

@@ -31,7 +31,12 @@ test("review uses main's points and a text-only snapshot; ordinary internal docs
     mkdirSync(repo);
     mkdirSync(join(repo, "docs"));
     const git = (...a: string[]) =>
-      execFileSync("git", a, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+      execFileSync("git", a, {
+        timeout: 30_000,
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
     const commit = () => {
       git("add", "-A");
       git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "test");

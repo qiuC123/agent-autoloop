@@ -36,9 +36,9 @@ irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 
 
 Windows 的 Codex 插件会用当前配置的 `codex sandbox` 探测工具实际运行的用户 SID，只给本轮 `agent/` 资料目录增加权限：`read` 只读，默认 `edit` 可读写。hub 数据库、密钥、配置及 worker 控制记录仍只属于当前用户；不放开用户组，也不自动改用 `full`。
 
-Windows 用当前用户登录时启动的计划任务常驻，不需要管理员权限；日志在 `~/.agent-autoloop/logs/up.log`。安装时保留终端的 PATH 和 Agent 配置目录，沿用本人登录；修改它们后重新运行 `agent-autoloop service install`。用 `--no-service` 安装时，在终端运行 `agent-autoloop up`。`agent-autoloop service status` 查看常驻状态，`service stop` 停止中台并保留下次登录启动，`service remove` 停止并移除计划任务。停止单轮用 `agent-autoloop stop <轮次>`，它会停掉整棵 Agent 进程树。Shell 示例需在对应的 shell 中运行，Windows 原生命令脚本用明确的 `node.exe` / `.exe` 和参数。
+Windows 用当前用户的计划任务常驻：登录时启动，每 5 分钟重复触发，runner 已在运行就忽略，不需要管理员权限；日志在 `~/.agent-autoloop/logs/up.log`。安装时保留终端的 PATH 和 Agent 配置目录，沿用本人登录；修改它们后重新运行 `agent-autoloop service install`。用 `--no-service` 安装时，在终端运行 `agent-autoloop up`。`agent-autoloop service status` 查看常驻状态，`service stop` 保存停止状态，重复触发、重新登录或重启电脑都不会自动恢复，直到再次 `service install`；`service remove` 停止并移除计划任务。停止单轮用 `agent-autoloop stop <轮次>`，它会停掉整棵 Agent 进程树。Shell 示例需在对应的 shell 中运行，Windows 原生命令脚本用明确的 `node.exe` / `.exe` 和参数。
 
-Windows 接单程序由 `up` 启动为独立子进程，避免同步命令阻塞中台或与通道子进程串用管道句柄。超过 30 秒没完成初始化，或之后超过 120 秒没有处理进度，`up` 会记下原因并以非零状态退出，让计划任务重启；接单子进程随之回收，已有独立 Agent 留给重启后恢复。前台运行需自行重启，详见[协议](docs/protocol.md)。
+Windows 接单程序由 `up` 启动为独立子进程，避免同步命令阻塞中台或与通道子进程串用管道句柄。超过 30 秒没完成初始化，或之后超过 120 秒没有处理进度，`up` 会记下原因并以非零状态退出；服务 runner 对任何退出码按 1–60 秒退避重启，不依赖计划任务的失败重试。runner 每 15 秒探测本机身份通道，连续 5 分钟无回应只强杀 `up`，由 libuv Job 回收其非 detached 子孙；独立 Agent 托管器保留，新 worker 按持久化 Job 名认领。长时间 Agent 任务不阻塞这个通道，健康超时和 `service stop` 都保留它们。ACL 改用限时的原生辅助程序，不再同步启动 PowerShell。前台运行需自行重启，升级后运行一次 `service install` 替换旧 runner 并更新任务触发器，详见[恢复调查](docs/windows-service-resilience.md)。
 
 三个平台的 `agent-autoloop service install` 都会记住 `AGENT_AUTOLOOP_RULES` 指定的自定义规则路径，并显示其绝对路径；修改或取消设置后重新安装服务即可更新。
 

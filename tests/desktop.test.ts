@@ -155,7 +155,7 @@ test(
     const parsed = spawnSync(
       join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe"),
       ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-      { encoding: "utf8", windowsHide: true },
+      { timeout: 30_000, encoding: "utf8", windowsHide: true },
     );
     assert.equal(parsed.status, 0, parsed.stderr);
   },
@@ -217,7 +217,7 @@ test(
     for (const title of hostile) {
       const [, args] = notifyCommand(title, "darwin");
       const onlyPrints = args.map((word) => (word.startsWith("display notification") ? "return item 2 of argv" : word));
-      const printed = execFileSync("/usr/bin/osascript", onlyPrints, { encoding: "utf8" });
+      const printed = execFileSync("/usr/bin/osascript", onlyPrints, { timeout: 30_000, encoding: "utf8" });
       assert.equal(printed.replace(/\n$/, ""), body(title));
     }
     assert.ok(!existsSync(marker));

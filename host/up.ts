@@ -74,7 +74,7 @@ export async function up() {
     process.env.AGENT_AUTOLOOP_PUBLIC_URL = config.hub.publicUrl ?? `http://${config.hub.listen}`;
     const { serve } = await import("./http.ts");
     const say = log("hub");
-    const server = serve(Number(port), host, { commit: commitOf() });
+    const server = serve(Number(port), host, { commit: await commitOf() });
     server.on("listening", () => say(`listening on ${config.hub!.listen}`));
     server.on("error", (error) => {
       say(`can't listen: ${error}`);

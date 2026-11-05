@@ -116,7 +116,10 @@ function linkSkill() {
 function howToRun() {
   if (process.platform === "win32")
     return `& '${process.execPath.replaceAll("'", "''")}' '${PROGRAM.replaceAll("'", "''")}'`;
-  const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], { encoding: "utf8" }).stdout?.trim();
+  const found = spawnSync("/bin/sh", ["-c", "command -v agent-autoloop"], {
+    timeout: 5_000,
+    encoding: "utf8",
+  }).stdout?.trim();
   if (found && realpathSync(found) === realpathSync(PROGRAM)) return "agent-autoloop";
   return /\s/.test(PROGRAM) ? `'${PROGRAM}'` : PROGRAM;
 }
@@ -510,7 +513,7 @@ function service(args: string[]) {
   if (args[0] === "remove") return removeService();
   if (process.platform === "win32" && args[0] === "stop") {
     stopUp();
-    return console.log("中台已停止，登录启动任务保留。");
+    return console.log("中台已停止，重新登录或重启后仍保持停止；运行 agent-autoloop service install 恢复。");
   }
   if (process.platform === "win32" && args[0] === "status")
     return console.log(serviceRunning() ? "后台中台正在运行。" : "后台中台没有运行。");
@@ -532,13 +535,16 @@ function addPlugin(args: string[]) {
     .toLowerCase();
   if (!/^[a-z][a-z0-9-]*$/.test(name)) fail("插件仓库名要用小写字母、数字和 -");
   mkdirSync(path.join(HOME, "plugins"), { recursive: true });
-  const clone = spawnSync("git", ["clone", "--", url, path.join(HOME, "plugins", name)], { stdio: "inherit" });
+  const clone = spawnSync("git", ["clone", "--", url, path.join(HOME, "plugins", name)], {
+    timeout: 120_000,
+    stdio: "inherit",
+  });
   if (clone.status !== 0) fail("安装失败。");
   console.log(`已安装 ${name}。`);
 }
 
 async function update() {
-  const pulled = spawnSync("git", ["-C", ROOT, "pull", "--ff-only"], { stdio: "inherit" });
+  const pulled = spawnSync("git", ["-C", ROOT, "pull", "--ff-only"], { timeout: 120_000, stdio: "inherit" });
   if (pulled.status !== 0) return fail("更新失败。");
   if (serviceRunning()) installService();
   console.log("更新好了。");
@@ -577,7 +583,7 @@ const commands: Record<string, () => unknown> = {
   },
   service: () => service(args),
   help: () => console.log(HELP),
-  "--version": () => console.log(versionLine()),
+  "--version": async () => console.log(await versionLine()),
 };
 if (!command || !commands[command]) {
   console.log(HELP);

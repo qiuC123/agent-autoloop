@@ -34,7 +34,8 @@ test("up starts its worker before concurrent long-lived channel children exit", 
     if (worker) {
       const original = cp.execFileSync;
       cp.execFileSync = (...args) => {
-        for (let n = 0; n < 4; n++) original(process.execPath, ['-e', ''], {windowsHide:true});
+        if (String(args[0]).endsWith('acl.exe'))
+          for (let n = 0; n < 4; n++) original(process.execPath, ['-e', ''], {windowsHide:true,timeout:5_000});
         return original(...args);
       };
       syncBuiltinESMExports();
@@ -101,7 +102,7 @@ for (const ending of ["kill", "exit"]) {
         writeFileSync(ids.worker, String(process.pid));
         const agent = spawn(process.execPath, ['-e','setInterval(()=>{},1e9)'], {windowsHide:true,detached:true,stdio:'ignore'});
         agent.unref(); writeFileSync(ids.agent, String(agent.pid));
-        execFileSync(process.execPath, ['-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(ids.native)}, String(process.pid)); setInterval(()=>{},1e9);`)}], {windowsHide:true});
+        execFileSync(process.execPath, ['-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(ids.native)}, String(process.pid)); setInterval(()=>{},1e9);`)}], {windowsHide:true,timeout:60_000});
       }
     `,
     );

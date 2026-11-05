@@ -42,7 +42,9 @@ export function notifyCommand(title: string, platform: string = process.platform
 function hasDesktop() {
   if (process.platform === "win32") return process.env.SESSIONNAME !== "Services";
   if (process.platform === "darwin") {
-    return spawnSync("launchctl", ["print", `gui/${process.getuid!()}`], { stdio: "ignore" }).status === 0;
+    return (
+      spawnSync("launchctl", ["print", `gui/${process.getuid!()}`], { timeout: 30_000, stdio: "ignore" }).status === 0
+    );
   }
   return process.platform === "linux" && Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }

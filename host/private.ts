@@ -2,25 +2,18 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { aclHelper } from "./windows-acl.ts";
 
 const protectedDirectories = new Set<string>();
 function protect(file: string, directory: boolean, agent?: { sid: string; access: "read" | "edit" }) {
   if (process.platform !== "win32") return chmodSync(file, directory ? 0o700 : 0o600);
   const absolute = path.resolve(file);
   if (directory && !agent && protectedDirectories.has(absolute)) return;
-  const grant = agent
-    ? `$agent=New-Object Security.Principal.SecurityIdentifier('${agent.sid}'); if(!$agent.IsAccountSid()){throw 'Expected a sandbox user SID'}; $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($agent,'${agent.access === "read" ? "ReadAndExecute" : "ReadAndExecute,Write"}','ContainerInherit,ObjectInherit','None','Allow')));`
-    : "";
-  // Startup recovery rewrites context with a protected ACL; only this data file must inherit the scoped grant again.
-  const inherit = agent
-    ? "$context=Join-Path $p 'context.json'; $data=[IO.File]::GetAccessControl($context); $data.SetAccessRuleProtection($false,$false); [IO.File]::SetAccessControl($context,$data);"
-    : "";
-  const script = `$ErrorActionPreference='Stop'; $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(absolute).toString("base64")}')); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=New-Object Security.AccessControl.${directory ? "DirectorySecurity" : "FileSecurity"}; $acl.SetAccessRuleProtection($true,$false); $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl',${directory ? "'ContainerInherit,ObjectInherit'" : "'None'"},'None','Allow'); $acl.AddAccessRule($rule); ${grant} [IO.${directory ? "Directory" : "File"}]::SetAccessControl($p,$acl); ${inherit}`;
-  execFileSync(
-    path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { stdio: "pipe", windowsHide: true },
-  );
+  execFileSync(aclHelper(), [absolute, directory ? "directory" : "file", ...(agent ? [agent.sid, agent.access] : [])], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    timeout: 5_000,
+  });
   if (directory && !agent) protectedDirectories.add(absolute);
   if (agent) protectedDirectories.delete(absolute);
 }

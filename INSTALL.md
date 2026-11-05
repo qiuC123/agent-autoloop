@@ -20,7 +20,7 @@ Windows PowerShell：
 irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 | iex
 ```
 
-Windows 常驻用当前用户的登录计划任务，使用交互登录令牌，不保存密码、不提权；任务名按数据目录区分，只跑一个实例，失败一分钟后重启。日志在数据目录的 `logs/up.log`。服务保留安装终端的 PATH 和 `HOME`、`USERPROFILE`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME` 中已有的目录设置；没有复制 Agent 凭据。修改这些目录或 PATH 后重新运行 `agent-autoloop service install`。
+Windows 常驻用当前用户的计划任务：登录触发，加每 5 分钟无限重复的时间触发；使用交互登录令牌，不保存密码、不提权，未登录时不运行。任务名按数据目录区分，`IgnoreNew` 保证只跑一个 runner；runner 意外退出后由下一次重复触发恢复。runner 负责恢复 `up`：所有退出码按 1–60 秒退避重启，连续健康 5 分钟重置退避；每 15 秒探测本机身份通道，连续 5 分钟无回应只强杀 `up`，保留独立 Agent，不依赖计划任务的失败重试。日志在数据目录的 `logs/up.log`。服务保留安装终端的 PATH 和 `HOME`、`USERPROFILE`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME` 中已有的目录设置；没有复制 Agent 凭据。修改这些目录或 PATH 后重新运行 `agent-autoloop service install`。
 
 三个平台的 `agent-autoloop service install` 都会记住 `AGENT_AUTOLOOP_RULES` 指定的自定义规则路径（相对路径按安装时的工作目录转成绝对路径），并在成功后打印规则文件位置；重装采用当前环境的新值，取消设置后重装则移除旧值，恢复使用数据目录下的 `rules.json`。
 
@@ -45,11 +45,11 @@ $env:AGENT_AUTOLOOP_REPO = 'C:/code/agent-autoloop'
 
 `--agent claude` 选择 Claude Code；只有其他 CLI 时加 `--command 'hermes chat -q {prompt}'`。不指定时会检测本机安装的 Agent，第一种作为试跑对象。
 
-Windows 的接单子进程初始化超过 30 秒或处理进度心跳中断超过 120 秒时，`up` 会记录原因并强制以非零状态退出，触发计划任务的失败重启。接单子进程及其非独立辅助进程随中台回收，独立 Agent 留给重启恢复。前台 `up` 需要自行重新运行；不修改现有计划任务设置。
+Windows 的接单子进程初始化超过 30 秒或处理进度心跳中断超过 120 秒时，`up` 会记录原因并强制以非零状态退出，由服务 runner 重启。看门狗同样只结束 `up`，libuv Job 回收 worker、通道和卡住的非 detached 原生子孙；detached Agent 托管器继续运行，供新 worker 按持久化 Job 名认领。`service stop` 先写私有 `service.stopped` 标记，再停止 runner 和 `up`，卡死或 runner 已死时也能保存停止意图；重复触发、重新登录、重启电脑均保持停止，直到再次 `service install`。前台 `up` 不清除此标记，也不带自动恢复。升级后执行一次 `service install` 替换旧 runner 并重写任务 XML；旧任务归属校验、`service.json` 格式不变，成功注册后才清除停止标记。实测和阈值说明见 [Windows 服务恢复调查](docs/windows-service-resilience.md)。
 
 程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`（Windows 的 `~` 是 `USERPROFILE`）。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；Windows 生成 `.cmd` 入口，不修改系统 PATH，没有位置时使用安装器打印的完整路径。
 
-安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
+安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。运行时 ACL 使用系统 .NET 编译的私有辅助程序，每进程首次编译限 30 秒、权限操作限 5 秒；失败就报错，不继续写秘密，不再为 ACL 启动 PowerShell。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 

@@ -325,7 +325,10 @@ for (const phase of ["before-lease", "before-job", "after-job"]) {
         join(process.env.SystemRoot ?? "C:\\Windows", "Microsoft.NET", framework, "v4.0.30319", "csc.exe"),
       )
       .find(existsSync)!;
-    execFileSync(compiler, ["/nologo", "/target:exe", `/out:${executable}`, cs], { windowsHide: true });
+    execFileSync(compiler, ["/nologo", "/target:exe", `/out:${executable}`, cs], {
+      timeout: 30_000,
+      windowsHide: true,
+    });
     const guardian = spawn(executable, ["run", name, spec], { windowsHide: true, stdio: "ignore" });
     let ended = false;
     guardian.on("exit", () => {

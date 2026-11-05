@@ -121,7 +121,7 @@ export function mutate() {
       const original = readFileSync(file, "utf8");
       try {
         writeFileSync(file, mutation.change(original));
-        const syntax = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
+        const syntax = spawnSync(process.execPath, ["--check", file], { timeout: 30_000, encoding: "utf8" });
         if (syntax.status !== 0) {
           invalid.push(mutation.name);
           continue;

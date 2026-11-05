@@ -45,7 +45,7 @@ for (const fault of ["loading", "preparation", "native", "poll", "healthy", "ret
         }
         if (fault === 'native') {
           const original = cp.execFileSync;
-          cp.execFileSync = () => original(process.execPath, ['-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(nativePid)}, String(process.pid)); setTimeout(() => {}, 20000);`)}], {windowsHide: true});
+          cp.execFileSync = () => original(process.execPath, ['-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(nativePid)}, String(process.pid)); setTimeout(() => {}, 20000);`)}], {windowsHide: true, timeout:30_000});
           syncBuiltinESMExports();
         }
         if (fault === 'poll' || fault === 'healthy') {

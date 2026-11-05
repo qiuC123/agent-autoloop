@@ -60,14 +60,19 @@ test(
     const launched = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/s", "/c", `""${path.join(mine, "agent-autoloop.cmd")}" --version"`],
-      { env: environment, encoding: "utf8", windowsVerbatimArguments: true },
+      { timeout: 30_000, env: environment, encoding: "utf8", windowsVerbatimArguments: true },
     );
     assert.equal(launched.status, 0, launched.stderr);
     assert.match(launched.stdout, /agent-autoloop/);
-    const denied = spawnSync(process.execPath, [program, "uninstall"], { env: environment, encoding: "utf8" });
+    const denied = spawnSync(process.execPath, [program, "uninstall"], {
+      timeout: 30_000,
+      env: environment,
+      encoding: "utf8",
+    });
     assert.notEqual(denied.status, 0);
     assert.ok(existsSync(app));
     const removed = spawnSync(process.execPath, [program, "uninstall", "--yes"], {
+      timeout: 30_000,
       env: environment,
       encoding: "utf8",
     });
@@ -118,12 +123,14 @@ test(
     const stopped = new Promise((resolve) => child.on("exit", resolve));
     const environment = { ...process.env, AGENT_AUTOLOOP_HOME: home, HOME: directory, USERPROFILE: directory };
     const status = spawnSync(process.execPath, [path.join(root, "bin", "agent-autoloop.ts"), "service", "status"], {
+      timeout: 30_000,
       env: environment,
       encoding: "utf8",
     });
     assert.equal(status.status, 0, status.stderr);
     assert.match(status.stdout, /没有运行/);
     const stoppedByCli = spawnSync(process.execPath, [path.join(root, "bin", "agent-autoloop.ts"), "service", "stop"], {
+      timeout: 30_000,
       env: environment,
       encoding: "utf8",
     });

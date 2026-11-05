@@ -35,10 +35,7 @@ const agentAutoloop = (args: string[], env: NodeJS.ProcessEnv) =>
   spawnSync(
     process.execPath,
     ["--disable-warning=ExperimentalWarning", join(ROOT, "bin", "agent-autoloop.ts"), ...args],
-    {
-      env: { ...cleanEnv(), ...env },
-      encoding: "utf8",
-    },
+    { timeout: 30_000, env: { ...cleanEnv(), ...env }, encoding: "utf8" },
   );
 const readRules = (name: string) => JSON.parse(readFileSync(join(RECIPES, name, "rules.json"), "utf8"));
 const readDoc = (name: string) => readFileSync(join(RECIPES, name, "README.md"), "utf8");
@@ -116,6 +113,7 @@ test(
       const curl = /```bash\n(curl [\s\S]*?)```/.exec(readDoc("ops-alerts"))?.[1];
       assert.ok(curl, "README 里要有一条 curl");
       const sent = spawnSync("sh", ["-c", curl.replaceAll("http://127.0.0.1:3350", url)], {
+        timeout: 30_000,
         env: { ...cleanEnv(), SHOP_KEY: key },
         encoding: "utf8",
       });
@@ -160,6 +158,7 @@ function watch(args: string[]) {
   ];
   writeFileSync(join(dir, "issues.json"), JSON.stringify(issues));
   const done = spawnSync("sh", [join(ROOT, "examples", "watch-github-issues.sh"), ...args], {
+    timeout: 30_000,
     env: {
       ...cleanEnv(),
       PATH: `${dir}:${process.env.PATH}`,

@@ -10,7 +10,7 @@ export function assertPrivate(file: string, directory = false) {
   const result = execFileSync(
     path.join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { encoding: "utf8" },
+    { timeout: 30_000, encoding: "utf8" },
   );
   assert.match(result, /private/);
 }

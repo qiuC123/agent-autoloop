@@ -1,17 +1,27 @@
 // Prevents losing custom rules or PATH, registering a machine-wide task, executing paths as code, or removing another task.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { windowsService } from "../host/windows-service.ts";
+import { launchServiceUp, windowsService } from "../host/windows-service.ts";
 
 const directory = mkdtempSync(path.join(tmpdir(), "agent-autoloop-service-"));
 after(() => rmSync(directory, { recursive: true, force: true }));
 
-test("Windows install captures current rules, updates them and removes them on reinstall; runner uses the saved path", () => {
+test("Windows install captures current rules, updates them and removes them on reinstall; runner uses the saved path", async () => {
   const home = path.join(directory, "rules service");
   const program = path.join(home, "engine.mjs");
   const service = windowsService({
@@ -36,18 +46,15 @@ console.log(JSON.stringify({ rules: process.env.AGENT_AUTOLOOP_RULES, file: RULE
       );
       const log = path.join(home, "logs", "up.log");
       writeFileSync(log, "");
-      const env = { ...process.env };
-      delete env.AGENT_AUTOLOOP_RULES;
-      const result = spawnSync(
-        process.execPath,
-        [path.resolve(import.meta.dirname, "../host/windows-service.ts"), service.configFile],
-        {
-          env,
-          encoding: "utf8",
-          timeout: 10_000,
-        },
-      );
-      assert.equal(result.status, 0, result.stderr);
+      delete process.env.AGENT_AUTOLOOP_RULES;
+      const fd = openSync(log, "a");
+      const launched = launchServiceUp(config, fd);
+      closeSync(fd);
+      const status = await new Promise((resolve, reject) => {
+        launched.once("exit", resolve);
+        launched.once("error", reject);
+      });
+      assert.equal(status, 0);
       const child = JSON.parse(readFileSync(log, "utf8"));
       assert.equal(child.rules, rules === undefined ? undefined : path.resolve(rules));
       assert.equal(child.file, rules === undefined ? path.join(home, "rules.json") : path.resolve(rules));
@@ -95,6 +102,12 @@ test("Windows task uses the current user's interactive login, one instance and n
   assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/);
   assert.match(xml, /<RunLevel>LeastPrivilege<\/RunLevel>/);
   assert.match(xml, /<LogonTrigger>/);
+  const repetition = /<TimeTrigger>([\s\S]*?)<\/TimeTrigger>/.exec(xml)?.[1];
+  assert.ok(repetition, "runner recovery must work before the next login");
+  assert.match(repetition, /<Repetition><Interval>PT5M<\/Interval><\/Repetition>/);
+  assert.doesNotMatch(repetition, /Duration|EndBoundary/);
+  const start = Date.parse(/<StartBoundary>(.*?)<\/StartBoundary>/.exec(repetition)![1]);
+  assert.ok(start > Date.now() && start <= Date.now() + 300_000);
   assert.match(xml, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<AllowHardTerminate>false<\/AllowHardTerminate>/);
@@ -105,6 +118,40 @@ test("Windows task uses the current user's interactive login, one instance and n
   assert.equal(config.searchPath, "C:\\my tools;C:\\Windows\\System32");
   assert.equal(config.home, path.join(directory, "home & space"));
   assert.ok(!Object.hasOwn(config, "environment"), "do not persist unrelated terminal secrets");
+});
+
+test("reinstall upgrades an owned old task and resumes a persistent stop only after registration succeeds", () => {
+  const home = path.join(directory, "upgrade");
+  const marker = path.join(home, "service.stopped");
+  let createFails = true;
+  let installed = "";
+  const service = windowsService({
+    home,
+    user: "S-1-5-21-123",
+    run: (program, args) => {
+      if (program === "powershell.exe")
+        return {
+          status: 0,
+          stdout: Buffer.from(service.xml().replace(/<TimeTrigger>[\s\S]*?<\/TimeTrigger>/, "")).toString("base64"),
+        };
+      if (args[0] === "/Create") {
+        assert.ok(existsSync(marker), "failed registration must leave the service stopped");
+        installed = readFileSync(service.taskFile, "utf16le");
+        return { status: createFails ? 1 : 0, stdout: "fixture registration failure" };
+      }
+      assert.equal(args[0], "/Run");
+      assert.equal(existsSync(marker), false, "install must resume before starting the task");
+      return { status: 0, stdout: "" };
+    },
+  });
+  mkdirSync(home);
+  writeFileSync(marker, "stopped");
+  assert.throws(() => service.install(), /fixture registration failure/);
+  assert.ok(existsSync(marker));
+  createFails = false;
+  service.install();
+  assert.match(installed, /<TimeTrigger>/);
+  assert.equal(existsSync(marker), false);
 });
 
 test("Windows remove only deletes the matching task and leaves another task untouched", () => {
@@ -127,6 +174,20 @@ test("Windows remove only deletes the matching task and leaves another task unto
   service.remove();
   assert.deepEqual(calls.at(-1), ["/Delete", "/TN", service.name, "/F"]);
   assert.ok(!calls.some((args) => args[0] === "/End"), "normal service stop must preserve detached agents");
+});
+
+test("a timed-out task ownership query must not overwrite an existing task", () => {
+  const calls: string[] = [];
+  const service = windowsService({
+    home: path.join(directory, "unknown-ownership"),
+    user: "S-1-5-21-123",
+    run: (program) => {
+      calls.push(program);
+      return { status: null, stdout: "", error: Object.assign(new Error("query timed out"), { code: "ETIMEDOUT" }) };
+    },
+  });
+  assert.throws(() => service.install(), /query timed out/);
+  assert.deepEqual(calls, ["powershell.exe"]);
 });
 
 test("Windows service names distinguish data directories, and launcher arguments are literal", () => {
@@ -200,7 +261,7 @@ test("Windows task readback preserves Unicode paths and accepts standard XML ent
   assert.deepEqual(calls.at(-1), ["/Delete", "/TN", service.name, "/F"]);
 });
 
-test("Windows task launcher preserves PATH and login directories, logs both streams and returns the engine status", () => {
+test("Windows engine launch preserves PATH and login directories, logs both streams and exposes the exit status to supervision", async () => {
   const target = path.join(directory, "runner target 中文 & space");
   mkdirSync(path.join(target, "logs"), { recursive: true });
   const home = path.join(directory, "runner 中文 & space");
@@ -221,12 +282,14 @@ test("Windows task launcher preserves PATH and login directories, logs both stre
       agentHomes: { CODEX_HOME: "test login directory", AGENT_AUTOLOOP_RULES: path.join(home, "旧规则 & space.json") },
     }),
   );
-  const result = spawnSync(
-    process.execPath,
-    [path.join(import.meta.dirname, "..", "host", "windows-service.ts"), configuration],
-    { encoding: "utf8" },
-  );
-  assert.equal(result.status, 7, result.stderr);
+  const fd = openSync(path.join(home, "logs", "up.log"), "a");
+  const launched = launchServiceUp(JSON.parse(readFileSync(configuration, "utf8")), fd);
+  closeSync(fd);
+  const status = await new Promise((resolve, reject) => {
+    launched.once("exit", resolve);
+    launched.once("error", reject);
+  });
+  assert.equal(status, 7);
   const lines = readFileSync(path.join(home, "logs", "up.log"), "utf8")
     .trim()
     .split(/\r?\n/);

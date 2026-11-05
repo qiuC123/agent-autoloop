@@ -185,6 +185,7 @@ if [ "$1" = clone ]; then for target; do :; done; cp -R "${copy}" "$target"; mkd
       executable(join(shell, "brew"), `[ "$*" = "--prefix node@24" ] && echo /homebrew/opt/node@24`);
       const line = done.stdout.split("\n").find((printed) => printed.includes("brew --prefix"))!;
       const pasted = spawnSync("/bin/sh", ["-c", line.trim()], {
+        timeout: 30_000,
         env: { HOME: shell, PATH: shell },
         encoding: "utf8",
       });

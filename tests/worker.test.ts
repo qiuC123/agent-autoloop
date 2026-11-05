@@ -351,7 +351,7 @@ test(
       assert.equal(hub.results.length, 0, "the wrapper exited, but its child has not");
       clock += 11_000;
       await until(again, () => hub.results.length === 1);
-      const live = execFileSync("ps", ["-ax", "-o", "pid=", "-o", "stat="], { encoding: "utf8" })
+      const live = execFileSync("ps", ["-ax", "-o", "pid=", "-o", "stat="], { timeout: 30_000, encoding: "utf8" })
         .trim()
         .split("\n")
         .some((line) => {

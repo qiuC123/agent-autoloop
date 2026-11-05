@@ -37,6 +37,7 @@ const prompt = [
   "结束前关闭本次新建的标签，保留原有标签。由主任务负责业务和中台回执。",
 ].join("\n");
 const run = spawnSync(task.command[0], [...task.command.slice(1), ...(session ? ["--resume", session] : []), prompt], {
+  timeout: 3 * 60 * 60_000,
   stdio: "inherit",
 });
 if (run.error) throw run.error;

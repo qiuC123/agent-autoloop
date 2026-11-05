@@ -51,12 +51,6 @@ $env:AGENT_AUTOLOOP_REPO = 'C:/code/agent-autoloop'
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 
-## 部署时保持维护
-
-支持维护 API 的引擎可先用本人密钥向 `POST /v1/maintenance` 发送 `drain`（带将来的 `deadline`），保存返回的 `id`；`GET` 看到 `claimed=0`、`unknown=0` 后，以该 ID 发送 `hold`，成功后再停服务、更新和启动。新进程仍保持 held；核对 `problem=null`、状态与生效规则的 `rules_version` / `rules_hash` 后，以同一 ID 显式 `resume`。到期不会自动恢复，要核对后 `renew` 再 resume。首次升级前的旧引擎尚不支持此流程；完整请求见[维护协议](docs/protocol.md#持久维护闸门)。
-
-`<home>/maintenance.json` 是宿主控制文件，不手动删除或改成 normal；缺损会关闭新领取，状态会说明问题。数据库中的宿主初始化标记让重启和投影重建也能识别文件丢失。备份、恢复时一起保留 `maintenance.json`、`hub.db` 和 `master.key`。
-
 ## 临时 HOME、CI 或没有服务管理器
 
 使用临时 HOME 时不要装系统服务，不改真实用户的 shell 配置和 Agent 配置。保留调用者给定的 `AGENT_AUTOLOOP_HOME`；用真实 `CODEX_HOME` 只为了沿用已经完成的 Codex 登录。
@@ -110,6 +104,12 @@ Claude 要委托 Codex 处理网页时，可用[浏览器交接模板](examples/
 国内业务可从反馈处理、网站巡检、飞书周报与业务摘要三套模板开始。它们默认飞书本人私聊；替换占位符后，配置和业务资料留在私有目录，不提交到仓库。模板不替用户新建凭据或扩大飞书权限。
 
 桌面通知只在这台电脑上显示。需要别的通道时，先确认接收位置，再按配置手册接入。不要直接测试发信或发群消息。`access` 的含义见[插件说明](docs/plugins.md#access-实际能做什么)，不要替用户扩大权限。
+
+## 部署时保持维护
+
+支持维护 API 的引擎可先用本人密钥向 `POST /v1/maintenance` 发送 `drain`（带将来的 `deadline`），保存返回的 `id`；`GET` 看到 `claimed=0`、`unknown=0` 后，以该 ID 发送 `hold`，成功后再停服务、更新和启动。新进程仍保持 held；核对 `problem=null`、状态与生效规则的 `rules_version` / `rules_hash` 后，以同一 ID 显式 `resume`。到期不会自动恢复，要核对后 `renew` 再 resume。首次升级前的旧引擎尚不支持此流程；完整请求见[维护协议](docs/protocol.md#持久维护闸门)。
+
+`<home>/maintenance.json` 是宿主控制文件，不手动删除或改成 normal；缺损会关闭新领取，状态会说明问题。数据库中的宿主初始化标记让重启和投影重建也能识别文件丢失。备份、恢复时一起保留 `maintenance.json`、`hub.db` 和 `master.key`。
 
 ## 卸载
 

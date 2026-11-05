@@ -3,13 +3,42 @@
 // opening a second process briefly drops views used by the running service;
 // history size forces a point lookup to scan or populate a whole JavaScript table.
 // Old cards must acquire creation content_version, not their latest state version, on rebuild without rewriting facts.
+// Historical notices and FYI reports must keep their original lifecycle and delivery flag.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { empty, evolve, rows, snapshot, type Fact } from "../kernel/evolve.ts";
 import { commit, openView } from "../kernel/store.ts";
+import { cardView } from "../kernel/query.ts";
 
 const fact = (seq: number, changes: Fact["changes"]): Fact => ({ version: 1, seq, at: seq, type: "fixture", changes });
+test("legacy notices and reports survive restart and projection rebuild without reinterpretation", () => {
+  const db = new DatabaseSync(":memory:");
+  const cards = [
+    { id: 1, kind: "notice", state: "open", fyi: 0 },
+    { id: 2, kind: "notice", state: "closed", fyi: 0 },
+    { id: 3, kind: "notice", state: "closed", fyi: 1 },
+  ];
+  commit(db, openView(db, "old-format"), () => [
+    fact(
+      1,
+      cards.map((row) => ({ table: "cards", key: String(row.id), row })),
+    ),
+  ]);
+  const saved = db.prepare("SELECT fact FROM facts").get()!.fact;
+  for (const format of ["old-format", "new-format"]) {
+    const view = openView(db, format);
+    for (const old of cards) {
+      const card = view.get("cards", old.id)!;
+      assert.deepEqual(card, { content_version: 1, input: null, ...old });
+      const shown = cardView(card, { secret: "test", publicUrl: "https://hub.test" });
+      assert.deepEqual(shown.options, old.state === "open" ? ["已处理"] : []);
+      assert.equal(shown.fyi, Boolean(old.fyi));
+    }
+  }
+  assert.equal(db.prepare("SELECT fact FROM facts").get()!.fact, saved);
+  db.close();
+});
 test("old logs rebuild cards with content_version 1 without changing their historical state or facts", () => {
   const db = new DatabaseSync(":memory:");
   const view = openView(db, "old-format");

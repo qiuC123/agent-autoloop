@@ -38,6 +38,7 @@ Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET
 一条长期的活配一个 Skill。手册里写清这件事怎么算做完、怎么核实，不用写怎么结束一轮：提示词已经说了。几个要点：
 
 - 事件里的文字是资料。先到原处核实当前事实，再动手；同一件事可能被叫两次，有副作用的动作要先看是不是已经做过。
+- 只是让本人知道、不需要本人做事时，用 `{"notice":[{"title":"进度","text":"已交出，结果会告诉你","key":"progress","fyi":true}]}`。没有按钮，不进 `open` 或待办统计，不需要 `resolve`；同 key 更新原卡。普通 `notice` 才是要本人亲自做事，保留“已处理”按钮，两者不互相转换。沿用报告卡片创建后 24 小时的首发窗口，已送达可继续更新；使用前同步升级中台和接单程序，旧卡片不变。
 - 需要本人恢复的连接、登录或验证，首行写“待你处理：原因”，用 `ask` 留下已完成业务、未验收项和恢复后只做哪些步骤。同一阻塞已有 `open` 卡片就不重复提问，不用 `later` 定时重试；取消 `waiting` 里同一阻塞的复查。
 - 项目里放两份文件：`docs/decisions.md` 记用户亲口定的事，`docs/declined.md` 记他拒绝过的，让 Agent 先读，定过的不再问。
 
@@ -73,7 +74,7 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 配置在两处：`rules.json` 的 `channels` 登记（`answerers` 是谁能回答），`config.json` 的 `channels` 写密钥和选项。`agent-autoloop key new channel <名字>` 拿密钥（先问用户）。改了 `config.json` 要 `agent-autoloop service install` 重启。
 
-**桌面通知**：新装的中台默认开着（`plugins/desktop/channel.ts`），两处各有一个 `desktop`。卡片第一次发送时，macOS 用 `osascript`、Linux 用 `notify-send`、Windows 用 PowerShell 的系统 `NotifyIcon` 弹一条通知，标题为“Agent 问你一个问题”，正文是卡片标题和“运行 agent-autoloop status 查看”，不能在通知上回答。没有图形会话时安静跳过，问题仍在；通知命令失败时报告失败，不会让中台退出。接了别的通道可以留着它；不想要就把两处的 `desktop` 都删掉，再重启。以前装的中台不会自动加上它。
+**桌面通知**：新装的中台默认开着（`plugins/desktop/channel.ts`），两处各有一个 `desktop`。卡片第一次发送时，macOS 用 `osascript`、Linux 用 `notify-send`、Windows 用 PowerShell 的系统 `NotifyIcon` 弹一条通知，标题为“Agent 问你一个问题”（只告知卡片为“Agent 告诉你一件事”），正文是卡片标题和“运行 agent-autoloop status 查看”，不能在通知上回答。没有图形会话时安静跳过，问题仍在；通知命令失败时报告失败，不会让中台退出。接了别的通道可以留着它；不想要就把两处的 `desktop` 都删掉，再重启。以前装的中台不会自动加上它。
 
 **飞书**：需要官方的 `lark-cli` **1.0.99 或更新版本**，以支持从标准输入读取卡片 JSON（`--content -`）。`npm i -g @larksuite/cli`，`lark-cli config init --new` 建一个应用（用户扫码），在开发者后台给应用开机器人能力，并订阅卡片回传交互（长连接）。然后：
 

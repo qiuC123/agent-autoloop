@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { snapshot, type Fact, type View, type Row } from "../kernel/evolve.ts";
 import type { Input } from "../kernel/decide.ts";
+import { cardView } from "../kernel/query.ts";
 
 type Snapshot = ReturnType<typeof snapshot>;
 const rows = (view: Snapshot, table: keyof Snapshot["tables"]) => Object.values(view.tables[table]);
@@ -34,6 +35,16 @@ export function invariants(current: View, log: Fact[], before?: Snapshot, input?
   const events = rows(view, "events");
   const runs = rows(view, "runs");
   const cards = rows(view, "cards");
+  for (const card of cards.filter((c) => c.fyi)) {
+    assert.equal(card.state, "closed", "只告知的卡片不能变成待办");
+    assert.equal(card.kind, "notice");
+    assert.deepEqual(
+      cardView(card, { secret: "simulation", publicUrl: "https://hub.test" }).options,
+      [],
+      "只告知的卡片不能有按钮",
+    );
+    assert.equal(card.answer_event, null, "只告知的卡片不能唤醒事项");
+  }
   const links = rows(view, "run_events");
   assert.equal(new Set(events.map((e) => JSON.stringify([e.source, e.key]))).size, events.length, "重复事件");
   const held = runs.filter((r) => r.state === "claimed");
@@ -78,7 +89,7 @@ export function invariants(current: View, log: Fact[], before?: Snapshot, input?
       const old: Row | undefined = before.tables.cards[card.id];
       if (!old) continue;
       const changed = ["title", "text", "options", "recommend", "about", "input"].some((key) => old[key] !== card[key]);
-      if (changed && !card.fyi) {
+      if (changed && (!card.fyi || input?.type === "finish")) {
         assert.equal(card.version, old.version + 1, "内容改变没有递增版本");
         assert.equal(card.content_version, card.version, "内容版本没有跟随更新");
       }

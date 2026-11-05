@@ -9,6 +9,7 @@
 // message (the ref sticks, and a stale report doesn't undo a newer one); a stale failure delays a newer version; a failed
 // send retries at once, or for ever; a channel that never came counts as having failed; a card solved before it was sent
 // bothers the owner; two channels don't each get their own copy; an answer in one channel doesn't update the other.
+// Receipt FYIs must reach channels without buttons, open attention or wakeups, and update without reopening old tasks.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -20,6 +21,9 @@ const { answer, resolve, nextCard, delivered, failed, tell, cardByToken, answerB
   await import("../host/runtime.ts");
 const { AuthError, Conflict, InputError, NotFound } = await import("../kernel/errors.ts");
 const { all, one, run } = await import("./storage.ts");
+const { stateOf } = await import("../host/runtime.ts");
+const { cardPage } = await import("../kernel/card-page.ts");
+const { checkSchema } = await import("../protocol/schema.ts");
 
 const clean = () => {
   for (const table of ["run_events", "runs", "events", "seen", "cards", "deliveries", "timers"])
@@ -52,6 +56,101 @@ function submitAgain(n: number, receipt: object, minute: number) {
   finish(job.run, job.token, { outcome: "done", ...receipt }, at(minute));
   return job;
 }
+
+test("receipt FYIs are delivered without buttons and never require attention, answers or resolution", () => {
+  clean();
+  const notice = { title: "已交给 Agent", text: "结果会告诉你", key: "handoff", fyi: true };
+  const job = submitAgain(1, { notice: [notice] }, 0);
+  const id = one<{ id: number }>("SELECT id FROM cards")!.id;
+  assert.deepEqual([card(id).fyi, card(id).state, card(id).version], [1, "closed", 1]);
+  const state = stateOf(at(0));
+  assert.equal(state.totals.attention, 0);
+  assert.deepEqual(state.cards, []);
+  assert.equal(state.recentCards[0].id, id);
+  for (const channel of ["chat", "plain"]) {
+    const sent = nextCard(channel, at(0))!;
+    assert.deepEqual([sent.id, sent.fyi, sent.state, sent.options], [id, true, "closed", []]);
+    assert.deepEqual(checkSchema("card", sent), []);
+    assert.doesNotMatch(cardPage(sent), /<button|<form|<input/);
+    delivered(channel, id, sent.version, `${channel}-fyi`, at(0));
+    assert.equal(answer(id, { choice: 0, channel, by: "me", ref: `${channel}-fyi` }, at(1)).changed, false);
+  }
+  assert.equal(resolve(id, "已知道", "owner", at(1)), false);
+  assert.equal(claim("w1", at(1)), null);
+  const next = submitAgain(1, { notice: [notice], resolve: [{ card: id, reason: "不用结案" }] }, 2);
+  assert.deepEqual(next.context.open, []);
+  assert.deepEqual(next.context.decided, []);
+  assert.equal(all("SELECT id FROM cards").length, 1);
+  assert.equal(card(id).version, 1);
+  assert.equal(nextCard("chat", at(2)), null);
+  assert.equal(finish(job.run, job.token, { outcome: "done", notice: [notice] }, at(3)).duplicate, true);
+  assert.equal(all("SELECT id FROM events WHERE type = 'card.answered'").length, 0);
+});
+
+test("FYI updates retain the card and message, retry failed channels and keep the existing report expiry", () => {
+  clean();
+  const notice = { title: "进度", text: "已交出", key: "progress", fyi: true };
+  submitAgain(1, { notice: [notice] }, 0);
+  const sent = nextCard("chat", at(0))!;
+  const original = card(sent.id);
+  delivered("chat", sent.id, sent.version, "original-message", at(0));
+  for (const minute of [0, 1, 3, 7, 15, 25, 35, 45, 55])
+    failed("plain", sent.id, nextCard("plain", at(minute))!.version, "断线", at(minute));
+  submitAgain(1, { notice: [{ ...notice, text: "处理中" }] }, 60);
+  for (const channel of ["chat", "plain"]) {
+    const update = nextCard(channel, at(60))!;
+    assert.deepEqual(
+      [update.id, update.version, update.content_version, update.text, update.options],
+      [sent.id, 2, 2, "处理中", []],
+    );
+    assert.equal(update.ref, channel === "chat" ? "original-message" : null);
+    delivered(channel, update.id, update.version, update.ref ?? "plain-message", at(60));
+  }
+  submitAgain(1, { notice: [{ ...notice, text: "完成了" }] }, 25 * 60);
+  const final = nextCard("chat", at(25 * 60))!;
+  assert.deepEqual([final.id, final.ref, final.state, final.version], [sent.id, "original-message", "closed", 3]);
+  assert.deepEqual([card(sent.id).created_at, card(sent.id).run_id], [original.created_at, original.run_id]);
+  assert.equal(nextCard("new-channel", at(25 * 60)), null, "unsent reports expire after one day");
+  assert.equal(all("SELECT id FROM cards").length, 1);
+});
+
+test("FYIs and actionable cards with the same key keep separate lifecycles", () => {
+  clean();
+  const { id } = asked(1);
+  const notice = { key: question.key, title: "进度", text: "无需操作", fyi: true };
+  submitAgain(1, { notice: [notice] }, 1);
+  const fyi = all<any>("SELECT * FROM cards WHERE fyi = 1")[0];
+  assert.equal(card(id).state, "open");
+  assert.equal(card(id).version, 1);
+  resolve(id, "不用决定了", "owner", at(2));
+  submitAgain(1, { notice: [{ ...notice, fyi: false, text: "请恢复连接" }] }, 3);
+  const actionable = all<any>("SELECT * FROM cards WHERE state = 'open'")[0];
+  assert.equal(actionable.fyi, 0);
+  assert.equal(card(fyi.id).state, "closed");
+  submitAgain(1, { notice: [{ ...notice, text: "更新进度" }] }, 4);
+  assert.equal(card(fyi.id).version, 2);
+  assert.equal(card(actionable.id).text, "请恢复连接");
+  const next = submitAgain(2, {}, 5);
+  assert.deepEqual(
+    next.context.open.map((c) => c.card),
+    [actionable.id],
+  );
+  assert.equal(stateOf(at(5)).totals.attention, 1);
+});
+
+test("failed receipts may inform; tell never still suppresses FYI delivery", () => {
+  clean();
+  ingest("ops", { id: "alert", type: "alert.raised" }, at(0));
+  const quiet = claim("w1", at(0))!;
+  const loud = claim("w2", at(0))!;
+  const notice = [{ title: "稍后再试", text: "会自动处理", fyi: true }];
+  finish(quiet.run, quiet.token, { outcome: "done", notice }, at(0));
+  assert.equal(nextCard("chat", at(0)), null);
+  finish(loud.run, loud.token, { outcome: "failed", error: "临时断线", notice }, at(0));
+  const sent = nextCard("chat", at(0))!;
+  assert.deepEqual([sent.state, sent.options], ["closed", []]);
+  assert.equal(stateOf(at(0)).totals.attention, 0);
+});
 
 test("each content field updates the same open question, omissions clear fields, and duplicates do nothing", () => {
   clean();

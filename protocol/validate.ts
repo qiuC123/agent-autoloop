@@ -13,7 +13,7 @@ export type Ask = {
   key?: string;
   input?: string;
 };
-export type Notice = { title: string; text: string; key?: string };
+export type Notice = { title: string; text: string; key?: string; fyi?: boolean };
 export type Usage = { input?: number; output?: number; cached?: number; cost?: number };
 
 /** Missing figures stay missing: zero is a price or token count that was actually reported. */
@@ -126,10 +126,11 @@ const validAsk = (ask: Item) =>
       (ask.recommend as number) < ask.options.length));
 
 const validNotice = (notice: Item) =>
-  only(notice, ["title", "text", "key"]) &&
+  only(notice, ["title", "text", "key", "fyi"]) &&
   text(notice.title, 200) &&
   text(notice.text, 4000) &&
-  optional(notice.key, 100);
+  optional(notice.key, 100) &&
+  (notice.fyi === undefined || typeof notice.fyi === "boolean");
 
 const validResolve = (item: Item) =>
   only(item, ["card", "reason"]) &&
@@ -169,7 +170,8 @@ export function parseResult(input: unknown): Result {
   if (!listOf(result.ask, 5, validAsk)) {
     throw new InputError("ask 每一项要有 title、text 和 2 到 5 个 options，recommend 是其中一个的序号，最多 5 项");
   }
-  if (!listOf(result.notice, 10, validNotice)) throw new InputError("notice 每一项要有 title 和 text，最多 10 项");
+  if (!listOf(result.notice, 10, validNotice))
+    throw new InputError("notice 每一项要有 title 和 text，fyi 若填写要是布尔值，最多 10 项");
   if (!listOf(result.resolve, 50, validResolve)) {
     throw new InputError("resolve 每一项要有卡片编号和 1000 字以内的核实依据，最多 50 项");
   }

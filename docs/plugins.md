@@ -70,6 +70,8 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 
 `ref` 为空就发新消息，有值就更新原消息；不能更新时只报告。没报告的卡片一分钟后重派。`signal` 中止时退出，函数异常退出后由外壳重启。
 
+只告知卡片 `fyi: true` 从创建起就是 `state: "closed"`、`options: []`，也要照常送达，不能添加“已处理”或其他按钮、文字输入框。飞书复用关闭通知的无交互渲染并更新原消息；Webhook 发标题和正文、不附回答链接；桌面标题为“Agent 告诉你一件事”，不能更新时只报告。旧中台可能不带 `fyi`，按原有状态和选项渲染仍兼容。`delivery` 是 Agent 插件，其审查问题需要本人修复，继续使用普通 `notice`。
+
 在 `rules.json` 登记通道、用 `agent-autoloop key new channel cards` 取密钥，再把下面这项放进 `config.json` 的 `channels`，重启中台：
 
 ```json

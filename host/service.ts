@@ -7,6 +7,7 @@ import path from "node:path";
 import { HOME } from "./home.ts";
 import { controlUp } from "./windows-control.ts";
 import { windowsService } from "./windows-service.ts";
+import { writePrivateFile } from "./private.ts";
 
 const PROGRAM = path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
 /** Another install on this machine (another AGENT_AUTOLOOP_HOME) has a service of its own. */
@@ -130,6 +131,7 @@ export function runningUp() {
 /** Stopping a service returns before its process is gone, and one started by hand has no service to stop it. */
 export function stopUp() {
   if (process.platform === "win32") {
+    if (existsSync(HOME)) writePrivateFile(path.join(HOME, "service.stopped"), "");
     if (controlUp(HOME, "stop", "service") !== null) {
       const deadline = Date.now() + 10_000;
       while (controlUp(HOME, "status", "service") !== null) {

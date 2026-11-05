@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import {
   closeSync,
+  existsSync,
   openSync,
   mkdirSync,
   mkdtempSync,
@@ -101,6 +102,12 @@ test("Windows task uses the current user's interactive login, one instance and n
   assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/);
   assert.match(xml, /<RunLevel>LeastPrivilege<\/RunLevel>/);
   assert.match(xml, /<LogonTrigger>/);
+  const repetition = /<TimeTrigger>([\s\S]*?)<\/TimeTrigger>/.exec(xml)?.[1];
+  assert.ok(repetition, "runner recovery must work before the next login");
+  assert.match(repetition, /<Repetition><Interval>PT5M<\/Interval><\/Repetition>/);
+  assert.doesNotMatch(repetition, /Duration|EndBoundary/);
+  const start = Date.parse(/<StartBoundary>(.*?)<\/StartBoundary>/.exec(repetition)![1]);
+  assert.ok(start > Date.now() && start <= Date.now() + 300_000);
   assert.match(xml, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<AllowHardTerminate>false<\/AllowHardTerminate>/);
@@ -111,6 +118,40 @@ test("Windows task uses the current user's interactive login, one instance and n
   assert.equal(config.searchPath, "C:\\my tools;C:\\Windows\\System32");
   assert.equal(config.home, path.join(directory, "home & space"));
   assert.ok(!Object.hasOwn(config, "environment"), "do not persist unrelated terminal secrets");
+});
+
+test("reinstall upgrades an owned old task and resumes a persistent stop only after registration succeeds", () => {
+  const home = path.join(directory, "upgrade");
+  const marker = path.join(home, "service.stopped");
+  let createFails = true;
+  let installed = "";
+  const service = windowsService({
+    home,
+    user: "S-1-5-21-123",
+    run: (program, args) => {
+      if (program === "powershell.exe")
+        return {
+          status: 0,
+          stdout: Buffer.from(service.xml().replace(/<TimeTrigger>[\s\S]*?<\/TimeTrigger>/, "")).toString("base64"),
+        };
+      if (args[0] === "/Create") {
+        assert.ok(existsSync(marker), "failed registration must leave the service stopped");
+        installed = readFileSync(service.taskFile, "utf16le");
+        return { status: createFails ? 1 : 0, stdout: "fixture registration failure" };
+      }
+      assert.equal(args[0], "/Run");
+      assert.equal(existsSync(marker), false, "install must resume before starting the task");
+      return { status: 0, stdout: "" };
+    },
+  });
+  mkdirSync(home);
+  writeFileSync(marker, "stopped");
+  assert.throws(() => service.install(), /fixture registration failure/);
+  assert.ok(existsSync(marker));
+  createFails = false;
+  service.install();
+  assert.match(installed, /<TimeTrigger>/);
+  assert.equal(existsSync(marker), false);
 });
 
 test("Windows remove only deletes the matching task and leaves another task untouched", () => {

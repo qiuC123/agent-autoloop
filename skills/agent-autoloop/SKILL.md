@@ -31,9 +31,9 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 现成场景和内置插件从 [README](../../README.md#拿来即用的场景模板)进入，开发示例见[写插件](../../docs/plugins.md)。用户想接自动化时先从例子改，不要从零写：`examples/recipes/` 里有早报（`morning-brief`）、处理 GitHub issue（`github-issues`）、线上报错（`ops-alerts`）、反馈处理（`feedback`）、网站巡检（`website-watch`）、飞书周报与业务摘要（`feishu-brief`）和 Claude 浏览器交接（`browser-handoff`），每个都有规则、Skill 和写明权限原因的 README。反馈、巡检、飞书摘要和浏览器交接默认飞书本人私聊；按模板说明替换虚构标识，业务资料留在私有目录，读取用本人身份，通知用机器人身份。要写新的 Agent、通道或事件插件，看教程 `docs/plugins.md` 和最小例子 `examples/plugins/`。
 
-Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台是当前用户登录时启动的计划任务，保留安装终端的 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保留任务只停中台，`service remove` 再删任务；独立 Agent 保留供重启认领；`stop <轮次>` 才会结束该轮整个 Job 进程树。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
+Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台计划任务在当前用户登录时和每 5 分钟触发，`IgnoreNew` 保留正在运行的 runner；保留安装终端 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保存停止标记，重复触发、重新登录和重启都不恢复，直到再次 `service install`；`service remove` 再删任务。独立 Agent 保留供重启认领；`stop <轮次>` 才会结束该轮整个 Job 进程树。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
 
-Windows 的接单程序由 `up` 托管为子进程，初始化限时 30 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应就结束整树并重启，不依赖计划任务重试。`service stop` 先停止看管，保留独立 Agent；健康超时回收整树。ACL 用限时原生辅助程序，不同步启动 PowerShell。升级后运行一次 `service install` 替换旧 runner。前台 `up` 需自行重启。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
+Windows 的接单程序由 `up` 托管为子进程，初始化限时 30 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应只强杀 `up`，由 libuv Job 回收非 detached 子孙，独立 Agent 托管器保留供新 worker 按 Job 名认领。`service stop` 同样保留独立 Agent。runner 本身退出由下一次重复触发恢复。ACL 用限时原生辅助程序，不同步启动 PowerShell。升级后运行一次 `service install` 替换旧 runner 和任务 XML。前台 `up` 需自行重启，不清除停止标记。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
 
 ## 写处理手册
 

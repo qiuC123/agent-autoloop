@@ -1,5 +1,5 @@
 // Failure modes: a clean/crashed engine stays down, a blocked hub survives forever, stop is undone by restart,
-// or a watchdog restart leaves the old process tree alive. All engines and control homes here are fixtures.
+// or a watchdog kills detached Agents instead of leaving them for recovery. All homes and engines are fixtures.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -37,12 +37,13 @@ async function fixture(
   mkdirSync(path.join(home, "logs"));
   const program = path.join(home, "engine.mjs");
   const preload = path.join(home, "clock.mjs");
+  // Native helper startup is not accelerated; leave it room before the shortened watchdog deadline.
   writeFileSync(
     preload,
     `import {registerHooks} from 'node:module';
     registerHooks({load(url, context, next) { const result=next(url,context);
       if(url.endsWith('/host/windows-service.ts')) result.source=String(result.source)
-        .replaceAll('300_000','1500').replaceAll('wait(15_000)','wait(100)').replaceAll('60_000','800').replaceAll('1_000','100').replaceAll('delay(5_000','delay(500');
+        .replaceAll('300_000','5000').replaceAll('wait(15_000)','wait(100)').replaceAll('60_000','800').replaceAll('1_000','100').replaceAll('delay(5_000','delay(500');
       return result; }});`,
   );
   writeFileSync(
@@ -84,7 +85,7 @@ async function fixture(
       } catch {}
     }
     if (child.exitCode === null) child.kill();
-    for (const match of log().matchAll(/(?:start \d+|descendant) (\d+)/g)) {
+    for (const match of log().matchAll(/(?:start \d+|descendant|detached) (\d+)/g)) {
       try {
         process.kill(Number(match[1]), "SIGKILL");
       } catch {}
@@ -118,21 +119,25 @@ for (const code of [0, 7, -1073741510]) {
 }
 
 test(
-  "runner kills a native-blocked engine and its descendants before restarting",
+  "watchdog reaps a blocked engine and non-detached children but preserves detached grandchildren",
   { skip: process.platform !== "win32", timeout: 25_000 },
   async () => {
     await fixture(
       `let unlock;unlock=await listenForControl(home,()=>{unlock();process.exit(0)});
-    if(count===1) execFileSync(process.execPath,['-e',"console.log('descendant '+process.pid);setInterval(()=>{},1000)"],{stdio:'inherit',windowsHide:true,timeout:20_000});`,
+    if(count===1) execFileSync(process.execPath,['-e',
+      "const {spawn}=require('node:child_process');const agent=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,windowsHide:true,stdio:'ignore'});agent.unref();console.log('detached '+agent.pid);console.log('descendant '+process.pid);setInterval(()=>{},1000)"
+    ],{stdio:'inherit',windowsHide:true,timeout:20_000});`,
       async (home, child, log) => {
         await until(() => log().includes("start 2"), log);
         const first = Number(/start 1 (\d+)/.exec(log())![1]);
         const descendant = Number(/descendant (\d+)/.exec(log())![1]);
+        const detached = Number(/detached (\d+)/.exec(log())![1]);
         assert.equal(alive(first), false, log());
         assert.equal(alive(descendant), false, log());
+        assert.equal(alive(detached), true, "detached Agent must remain available for the new worker");
         assert.equal(child.exitCode, null, log());
         await until(() => controlUp(home, "status") !== null, log);
-        await pause(2200);
+        await pause(5500);
         assert.equal(readFileSync(path.join(home, "starts"), "utf8"), "2", "responsive engine must survive");
       },
     );
@@ -199,12 +204,20 @@ test(
 );
 
 test(
-  "service stop reaches the runner while up is blocked or backing off",
-  { skip: process.platform !== "win32", timeout: 25_000 },
+  "service stop persists across repeated runner launches, even when the runner was already killed",
+  { skip: process.platform !== "win32", timeout: 45_000 },
   async () => {
-    for (const code of ["setInterval(()=>{},1000);", "process.exit(1);"]) {
+    for (const code of [
+      "setInterval(()=>{},1000);",
+      "process.exit(1);",
+      "console.log('kill runner');setInterval(()=>{},1000);",
+    ]) {
       await fixture(code, async (home, child, log) => {
         await until(() => log().includes("start 1"), log);
+        if (code.includes("kill runner")) {
+          child.kill("SIGKILL");
+          await until(() => child.exitCode !== null || child.signalCode !== null, log);
+        }
         execFileSync(
           process.execPath,
           [path.resolve(import.meta.dirname, "../bin/agent-autoloop.ts"), "service", "stop"],
@@ -215,10 +228,17 @@ test(
             stdio: "pipe",
           },
         );
-        await until(() => child.exitCode !== null, log);
+        await until(() => child.exitCode !== null || child.signalCode !== null, log);
         const starts = readFileSync(path.join(home, "starts"), "utf8");
         await pause(1000);
         assert.equal(readFileSync(path.join(home, "starts"), "utf8"), starts);
+        execFileSync(process.execPath, [runner, path.join(home, "service.json")], {
+          env: { ...process.env, AGENT_AUTOLOOP_HOME: home },
+          windowsHide: true,
+          timeout: 5_000,
+          stdio: "pipe",
+        });
+        assert.equal(readFileSync(path.join(home, "starts"), "utf8"), starts, "a scheduler trigger must not undo stop");
       });
     }
   },
@@ -237,7 +257,7 @@ test(
           [100, 200, 400, 800],
         );
         await until(() => controlUp(home, "status") !== null, log);
-        await pause(2200);
+        await pause(5500);
         assert.ok(controlUp(home, "stop"));
         await until(() => log().includes("start 6"), log);
         assert.equal([...log().matchAll(/将在 (\d+) 毫秒后重启/g)].at(-1)?.[1], "100", log());

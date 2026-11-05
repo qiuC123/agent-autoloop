@@ -513,7 +513,7 @@ function service(args: string[]) {
   if (args[0] === "remove") return removeService();
   if (process.platform === "win32" && args[0] === "stop") {
     stopUp();
-    return console.log("中台已停止，登录启动任务保留。");
+    return console.log("中台已停止，重新登录或重启后仍保持停止；运行 agent-autoloop service install 恢复。");
   }
   if (process.platform === "win32" && args[0] === "status")
     return console.log(serviceRunning() ? "后台中台正在运行。" : "后台中台没有运行。");

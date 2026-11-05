@@ -1,5 +1,5 @@
-// Task Scheduler starts the runner at login; the runner owns recovery and has its own authenticated stop channel.
-import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
+// Task Scheduler retries the runner every five minutes; a persistent stop suppresses future launches.
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync, writeSync } from "node:fs";
 import path from "node:path";
@@ -58,7 +58,7 @@ export function windowsService(options: Options) {
   const xml = () => `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>agent-autoloop ${escape(program)}</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${escape(user())}</UserId></LogonTrigger></Triggers>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${escape(user())}</UserId></LogonTrigger><TimeTrigger><Repetition><Interval>PT5M</Interval></Repetition><StartBoundary>${new Date(Date.now() + 300_000).toISOString()}</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>
   <Principals><Principal id="Owner"><UserId>${escape(user())}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowHardTerminate>false</AllowHardTerminate><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings>
   <Actions Context="Owner"><Exec><Command>${escape(node)}</Command><Arguments>${escape(["--disable-warning=ExperimentalWarning", runner, configFile].map(quote).join(" "))}</Arguments><WorkingDirectory>${escape(home)}</WorkingDirectory></Exec></Actions>
@@ -127,6 +127,7 @@ export function windowsService(options: Options) {
       writePrivateFile(configFile, JSON.stringify({ home, node, program, searchPath, agentHomes }) + "\n");
       writePrivateFile(taskFile, Buffer.from("\ufeff" + xml(), "utf16le"));
       checked(["/Create", "/TN", name, "/XML", taskFile, "/F"]);
+      rmSync(path.join(home, "service.stopped"), { force: true });
       checked(["/Run", "/TN", name]);
     },
     remove() {
@@ -156,23 +157,10 @@ export function launchServiceUp({ home, node, program, searchPath, agentHomes }:
   });
 }
 
-async function killTree(child: ChildProcess) {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
-      ["/PID", String(child.pid), "/T", "/F"],
-      { windowsHide: true, timeout: 15_000 },
-      (error) => {
-        if (error && child.exitCode === null && child.signalCode === null) reject(error);
-        else resolve();
-      },
-    );
-  });
-}
-
 export async function runWindowsService(configuration: Configuration) {
   const { home } = configuration;
+  const stopped = path.join(home, "service.stopped");
+  if (existsSync(stopped)) return;
   const stop = new AbortController();
   const ignore = () => {};
   for (const signal of ["SIGINT", "SIGBREAK"] as const) process.on(signal, ignore);
@@ -182,7 +170,7 @@ export async function runWindowsService(configuration: Configuration) {
   const wait = (ms: number) => delay(ms, undefined, { signal: stop.signal }).catch(() => {});
   let failures = 0;
   try {
-    while (!stop.signal.aborted) {
+    while (!stop.signal.aborted && !existsSync(stopped)) {
       const child = launchServiceUp(configuration, log);
       let ended = false;
       const exited = new Promise<void>((resolve) => {
@@ -192,7 +180,10 @@ export async function runWindowsService(configuration: Configuration) {
           say(`up 退出：${reason}`);
           resolve();
         };
-        child.once("error", (error) => finish(error.message));
+        child.on("error", (error) => {
+          if (!child.pid) finish(error.message);
+          else say(`up 进程操作失败：${error.message}`);
+        });
         child.once("exit", (code, signal) => finish(String(code ?? signal)));
       });
       let lastHealthy = performance.now();
@@ -211,12 +202,9 @@ export async function runWindowsService(configuration: Configuration) {
           healthySince = undefined;
           // Agent work is in other processes; even a long turn must leave the local control loop responsive.
           if (now - lastHealthy >= 300_000) {
-            say("up 连续 5 分钟没有回应，结束进程树后重启");
-            try {
-              await killTree(child);
-            } catch (error) {
-              say(`结束进程树失败：${error}`);
-            }
+            say("up 连续 5 分钟没有回应，结束 up 后重启，保留独立 Agent");
+            // libuv reaps non-detached children; detached Job guardians must survive for adoption.
+            child.kill("SIGKILL");
           }
         }
       }

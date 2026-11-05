@@ -62,6 +62,7 @@ test("the prompt says what to do and how to end, but not what anyone wrote", () 
   assert.match(text, /没跑成：/);
   assert.match(text, /没事可做：/);
   assert.match(text, /```agent-autoloop/);
+  assert.match(text, /"input".*20/);
   assert.ok(!text.includes("王某"));
   assert.ok(!text.includes("管理员权限"));
   assert.ok(!text.includes('"events"'), "a rule that can't emit isn't offered it");

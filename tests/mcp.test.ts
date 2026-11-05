@@ -11,7 +11,15 @@ import { setup } from "./helpers.ts";
 const home = setup("mcp");
 test("MCP stdio initializes and exposes only the typed hub operations", async () => {
   const calls: any[] = [];
+  const bodies: string[] = [];
   const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      if (req.url?.endsWith("/answer")) bodies.push(body);
+    });
     calls.push([req.url, req.headers.authorization]);
     res.statusCode = req.url?.includes("999") ? 404 : 200;
     res.end(JSON.stringify({ ok: true }));
@@ -48,6 +56,7 @@ test("MCP stdio initializes and exposes only the typed hub operations", async ()
     { id: 5, method: "tools/call", params: { name: "why", arguments: { run: 999 } } },
     { id: 6, method: "tools/call", params: { name: "request", arguments: { path: "/etc/passwd" } } },
     { id: 7, method: "tools/call", params: { name: "emit", arguments: { id: "a", type: "one" } } },
+    { id: 8, method: "tools/call", params: { name: "answer", arguments: { card: 5, text: "意见", version: 7 } } },
   ];
   child.stdin.end(messages.map((m) => JSON.stringify({ jsonrpc: "2.0", ...m })).join("\n") + "\n");
   await once(child, "close");
@@ -57,7 +66,7 @@ test("MCP stdio initializes and exposes only the typed hub operations", async ()
     .trim()
     .split("\n")
     .map((l) => JSON.parse(l));
-  assert.equal(responses.length, 7);
+  assert.equal(responses.length, 8);
   const get = (id: number) => responses.find((r) => r.id === id);
   assert.equal(get(1).result.protocolVersion, "2025-11-25");
   assert.ok(get(2).result.tools.some((t: any) => t.name === "answer"));
@@ -69,5 +78,10 @@ test("MCP stdio initializes and exposes only the typed hub operations", async ()
     ["/v1/state", "Bearer owner-key"],
     ["/v1/runs/999/why", "Bearer owner-key"],
     ["/v1/events", "Bearer source-key"],
+    ["/v1/cards/5/answer", "Bearer owner-key"],
   ]);
+  assert.deepEqual(
+    bodies.map((body) => JSON.parse(body)),
+    [{ text: "意见", version: 7 }],
+  );
 });

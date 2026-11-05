@@ -212,7 +212,7 @@ export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = 
         statement(db, "INSERT OR IGNORE INTO projection_refs VALUES (?,?,?)").run(table, key, fact.seq);
       if (row === null) remove.run(table, key);
       else {
-        const data = JSON.stringify(row);
+        const data = JSON.stringify(table === "cards" ? { content_version: 1, input: null, ...row } : row);
         put.run(table, key, data);
         // A held run keeps the configuration it claimed, including through projection rebuilds.
         if (table === "config" && key === "rules") put.run(table, String(row.version), data);

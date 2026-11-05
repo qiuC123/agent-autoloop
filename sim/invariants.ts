@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { snapshot, type Fact, type View, type Row } from "../kernel/evolve.ts";
+import type { Input } from "../kernel/decide.ts";
 
 type Snapshot = ReturnType<typeof snapshot>;
 const rows = (view: Snapshot, table: keyof Snapshot["tables"]) => Object.values(view.tables[table]);
@@ -17,7 +18,7 @@ export function replay(log: Fact[]): Snapshot {
     for (const { table, key, row } of fact.changes) {
       if (row === null) delete tables[table][key];
       else {
-        tables[table][key] = row;
+        tables[table][key] = table === "cards" ? { content_version: 1, input: null, ...row } : row;
         // Configuration versions are derived from each rules fact, including logs written before the lookup existed.
         if (table === "config" && key === "rules") tables.config[String(row.version)] = row;
         if (typeof row.id === "number") next[table] = Math.max(next[table] ?? 0, row.id);
@@ -26,7 +27,7 @@ export function replay(log: Fact[]): Snapshot {
   }
   return { seq, tables, next };
 }
-export function invariants(current: View, log: Fact[], before?: Snapshot) {
+export function invariants(current: View, log: Fact[], before?: Snapshot, input?: Input) {
   const view = snapshot(current);
   assert.deepEqual(view, replay(log), "日志重放记录不同");
   for (const [index, fact] of log.entries()) assert.equal(fact.seq, index + 1, "日志序号不连续");
@@ -65,6 +66,23 @@ export function invariants(current: View, log: Fact[], before?: Snapshot) {
         );
     }
   if (before) {
+    if (input?.type === "answer") {
+      const [id, given] = input.args;
+      const old: Row | undefined = before.tables.cards[id];
+      const accepted = old?.state === "open" && view.tables.cards[id]?.state !== "open";
+      if (accepted)
+        assert.ok(given.version === undefined || given.version >= old.content_version, "接受了旧内容的回答");
+    }
+    for (const card of cards) {
+      assert.ok(card.content_version >= 1 && card.content_version <= card.version, "内容版本越界");
+      const old: Row | undefined = before.tables.cards[card.id];
+      if (!old) continue;
+      const changed = ["title", "text", "options", "recommend", "about", "input"].some((key) => old[key] !== card[key]);
+      if (changed && !card.fyi) {
+        assert.equal(card.version, old.version + 1, "内容改变没有递增版本");
+        assert.equal(card.content_version, card.version, "内容版本没有跟随更新");
+      }
+    }
     for (const e of rows(before, "events")) assert.deepEqual(view.tables.events[e.id], e, "已落盘事件被改了或丢了");
     for (const c of rows(before, "cards"))
       if (c.answer_event !== null) {

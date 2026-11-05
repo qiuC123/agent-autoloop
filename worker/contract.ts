@@ -55,7 +55,7 @@ export function promptFor(job: Job, contextFile: string) {
       "一个标记为 agent-autoloop 的代码块，里面是 JSON，用不到的字段不写；什么都不需要就不附。",
     "```agent-autoloop",
     `{"ask":[{"title":"一句话说要决定什么","text":"三行以内","options":["选项一","选项二"],"recommend":0,\
-"about":"留给接着干的自己：背景，每个选项具体怎么做","key":"这件事的固定名字"}],
+"about":"留给接着干的自己：背景，每个选项具体怎么做","key":"这件事的固定名字","input":"可选的文字框标签，最多20字"}],
  "notice":[{"title":"一句话","text":"非他亲自做不可的事：要他做什么"}],
  "resolve":[{"card":12,"reason":"在哪核实了已解决或本人已决定"}],
  "later":[{"key":"这次复查的固定名字","at":"带时区的时间，比如 2026-11-05T09:00:00+08:00",\

@@ -64,7 +64,9 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 | `hub.nextCard(50)` | 长轮询领卡片，没卡片返回 `{ card: null }` |
 | `hub.delivered(id, version, ref)` | 报告送达，保存外部消息编号 |
 | `hub.failed(id, version, error)` | 报告发送失败 |
-| `hub.answer(id, { choice, by, ref })` | 转交回答；核对回答人和原消息 |
+| `hub.answer(id, { choice, version, by, ref })` | 转交回答；核对回答人和原消息 |
+
+送达时保存 `card.version`，把它放进每个选项按钮和文字提交按钮的回调值；回答时带回当时看到的版本，不能临时读取最新版本来替换。文字输入用 `{text, version, by, ref}`，可选 `card.input` 是标签和提示，缺省用“别的想法”。`version < content_version` 会返回 409“卡片已更新，请重看”；提示点击者重看，不因拒答重发整张卡片。旧通道省略 version 仍可用，但无法防止旧内容误答。
 
 `ref` 为空就发新消息，有值就更新原消息；不能更新时只报告。没报告的卡片一分钟后重派。`signal` 中止时退出，函数异常退出后由外壳重启。
 
@@ -77,6 +79,14 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 能收回调的通道要在规则里设置 `answerers`；只能发文字的通道设置 `links: true`，发送 `card.link`。拿到链接的人能回答这张卡片。
 
 通道和中台共用一个 Node 进程，外部调用应异步等待。内置飞书通道的用户查询、发送和更新均异步调用 CLI，发送期间中台仍能接收事件和心跳。
+
+### 飞书文字输入与过期反馈
+
+飞书通道需要 **lark-cli 1.0.99 或更新版本**。发送和更新卡片均通过标准输入传入 JSON；1.0.96 不接受发送时的 `--content -`，会报 `--content is not valid JSON: -`。1.0.99 已通过 `--dry-run` 验证该参数；下述 1.0.96 的回调文档核对不代表通道兼容该旧版本。
+
+内置飞书通道按 [2.0 表单](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/form-container)与[输入框](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/input)使用根级 `form`、具名 `input` 和 `form_action_type: "submit"` 按钮。选项回调为 `{card, choice, version}`，文字提交为 `{card, text: true, version}`；从 CLI 输出的 JSON 字符串 `form_value` 中读 `answer_text`，空白或非字符串不提交。只有 open ask 展示文字框。
+
+本机核对 `lark-cli 1.0.96` 的 `event consume card.action.trigger --help`、`event schema card.action.trigger` 和[官方回调文档](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-card-action-reply.md)：SDK 在 3 秒内自动回应 `{code:200}`，consume 只输出 NDJSON，没有回传 toast 的接口；延迟更新要求整张卡片。因此只在中台明确返回过期内容的 409 时，用 `im +messages-reply --message-id <原消息> --as bot --text "卡片已更新，请重看"` 提示。401、无效输入和其他错误仍报告日志，不向未经核验的消息回复。整个核对只读帮助与文档，测试用假 CLI；新表单 JSON 未经过真机验证。
 
 ## 事件插件
 

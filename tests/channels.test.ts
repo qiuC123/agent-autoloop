@@ -4,6 +4,7 @@
 // the listener dying isn't started again. A GitHub webhook with a bad signature, or with none, is taken; what isn't an
 // identifier reaches the subject; a ping makes an event; replacement tokens in card text rewrite a webhook template.
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
+// Text submits must use form_value; stale answers must notify at the original message without patching the card.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,6 +17,7 @@ import feishu, { render } from "../plugins/feishu/channel.ts";
 import webhook from "../plugins/webhook/channel.ts";
 import github from "../plugins/github/source.ts";
 import type { Card } from "../host/channels.ts";
+import { HubError } from "../protocol/client.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agent-autoloop-channels-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -23,6 +25,8 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 const base: Card = {
   id: 5,
   version: 1,
+  content_version: 1,
+  input: null,
   ref: null,
   kind: "ask",
   state: "open",
@@ -40,7 +44,7 @@ test("a card shows its options while it's open, and what became of it after", ()
   const open = render(base);
   const blocks = open.body.elements.filter((e) => e.tag === "interactive_container") as any[];
   assert.equal(blocks.length, 2);
-  assert.deepEqual(blocks[1].behaviors[0].value, { card: 5, choice: 1 });
+  assert.deepEqual(blocks[1].behaviors[0].value, { card: 5, choice: 1, version: 1 });
   assert.equal(blocks[1].border_color, "blue", "what's recommended stands out");
   const said = (card: Card) => JSON.stringify(render(card).body.elements);
   assert.match(said({ ...base, state: "decided", choice: 1 }), /你选了「留着」，已记录/);
@@ -50,6 +54,128 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
 });
+
+test("open questions have a named form with a versioned submit and an optional plain-text input label", () => {
+  for (const input of [null, '返工意见"<>']) {
+    const card = render({ ...base, version: 3, input });
+    const form = card.body.elements.find((e) => e.tag === "form") as any;
+    assert.ok(form);
+    assert.equal(form.name, "answer_form");
+    const field = form.elements.find((e: any) => e.tag === "input");
+    assert.equal(field.name, "answer_text");
+    assert.equal(field.required, true);
+    assert.deepEqual(field.label, { tag: "plain_text", content: input ?? "别的想法" });
+    assert.deepEqual(field.placeholder, field.label);
+    const submit = form.elements.find((e: any) => e.tag === "button");
+    assert.equal(submit.name, "answer_submit");
+    assert.equal(submit.form_action_type, "submit");
+    assert.deepEqual(submit.behaviors, [{ type: "callback", value: { card: 5, text: true, version: 3 } }]);
+  }
+  for (const card of [
+    { ...base, kind: "notice" },
+    ...["decided", "done", "closed"].map((state) => ({ ...base, state })),
+  ])
+    assert.ok(!render(card as Card).body.elements.some((e) => e.tag === "form"));
+});
+
+test(
+  "feishu reads form submissions and replies only to stale clicks, never resending the card",
+  { timeout: 10000 },
+  async () => {
+    const lark = join(dir, "form-lark");
+    const logFile = join(dir, "form-lark.log");
+    const event = (value: object, form?: unknown) => ({
+      action_value: JSON.stringify(value),
+      form_value: form === undefined ? "" : JSON.stringify(form),
+      operator_id: "ou_me",
+      message_id: "om_5",
+    });
+    const events = [
+      event({ card: 5, text: true, version: 2 }, { answer_text: "改成归档" }),
+      event({ card: 5, text: true, version: 1 }, { answer_text: "旧想法" }),
+      event({ card: 5, choice: 0, version: 1 }),
+      { ...event({ card: 5, choice: 0, version: 2 }), operator_id: "intruder" },
+      event({ card: 5, text: true, version: 2 }, { answer_text: 12 }),
+      event({ card: 5, text: true, version: 2 }, { answer_text: " " }),
+      event({ card: 5, text: true, version: 2 }, {}),
+      event({ other: 1 }),
+    ];
+    writeFileSync(
+      lark,
+      `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'event') {
+  for (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));
+  setInterval(() => {}, 1000);
+} else {
+  fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify(args) + '\\n');
+  process.stdin.resume();
+  process.stdin.on('end', () => console.log(JSON.stringify({ ok: true })));
+}
+`,
+      { mode: 0o755 },
+    );
+    const stop = new AbortController();
+    const calls: any[] = [];
+    let complete!: () => void;
+    const done = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const timeout = setTimeout(() => {
+      stop.abort();
+      complete();
+    }, 5000);
+    const logs: string[] = [];
+    const hub = {
+      async nextCard() {
+        await done;
+        stop.abort();
+        return { card: null };
+      },
+      async answer(id: number, body: any) {
+        calls.push([id, body]);
+        if (body.by === "intruder") throw new HubError(401, "这个人不能回答这张卡片");
+        if (body.version === 1) throw new HubError(409, "卡片已更新，请重看");
+        return { changed: true };
+      },
+    };
+    try {
+      await feishu({
+        hub: hub as any,
+        options: { user: "ou_me", lark },
+        signal: stop.signal,
+        log: (line) => {
+          logs.push(line);
+          if (logs.length === 4) complete();
+        },
+      });
+      assert.equal(calls.length, 4);
+      assert.deepEqual(calls[0], [5, { text: "改成归档", version: 2, by: "ou_me", ref: "om_5" }]);
+      const commands = readFileSync(logFile, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(
+        commands,
+        Array.from({ length: 2 }, () => [
+          "im",
+          "+messages-reply",
+          "--message-id",
+          "om_5",
+          "--as",
+          "bot",
+          "--text",
+          "卡片已更新，请重看",
+        ]),
+      );
+      assert.ok(logs.some((line) => line.includes("401") || line.includes("不能回答")));
+    } finally {
+      clearTimeout(timeout);
+      stop.abort();
+    }
+  },
+);
 
 test("feishu CLI calls leave the HTTP loop available", async () => {
   let requests = 0;

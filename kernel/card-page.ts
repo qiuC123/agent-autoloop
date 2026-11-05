@@ -45,9 +45,14 @@ export function cardPage(card: ReturnType<typeof cardView>) {
       return `<button name="choice" value="${index}"${best}>${escaped(option)}</button>`;
     };
     // Its own form: Enter in the box mustn't press the first option.
-    const box = `<input name="text" placeholder="别的想法" aria-label="别的想法" required>`;
-    const other = card.kind === "ask" ? `<form method="post">${box}<button>发送</button></form>` : "";
-    return shell(card.title, `${words}<form method="post">${card.options.map(button).join("")}</form>${other}`);
+    const version = `<input type="hidden" name="version" value="${card.version}">`;
+    const label = escaped(card.input ?? "别的想法");
+    const box = `<input name="text" placeholder="${label}" aria-label="${label}" required>`;
+    const other = card.kind === "ask" ? `<form method="post">${version}${box}<button>发送</button></form>` : "";
+    return shell(
+      card.title,
+      `${words}<form method="post">${version}${card.options.map(button).join("")}</form>${other}`,
+    );
   }
   const chosen = card.choice !== null ? card.options[card.choice] : card.answer;
   const outcome = [chosen ? `你选了「${chosen}」` : "", card.result ?? ""].filter(Boolean).join("。");

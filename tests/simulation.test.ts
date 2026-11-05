@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { simulate } from "../sim/random.ts";
-import { enumerate } from "../sim/enumerate.ts";
+import { enumerate, enumerateCards } from "../sim/enumerate.ts";
 import { World } from "../sim/world.ts";
 import { AuthError } from "../kernel/errors.ts";
 import { empty, evolve } from "../kernel/evolve.ts";
@@ -12,10 +12,44 @@ import { invariants } from "../sim/invariants.ts";
 test("200000 deterministic fault steps preserve safety and recovered work terminates", () => {
   const result = simulate(0x5eed, 200000);
   assert.equal(result.steps, 200000);
-  for (const fault of ["lost", "duplicate", "restart", "offline", "channel", "clock"])
+  for (const fault of ["lost", "duplicate", "restart", "offline", "channel", "clock", "update", "staleAnswer"])
     assert.ok(result.faults[fault] > 0, fault);
   assert.ok(result.completed > 0);
   console.log(JSON.stringify(result));
+});
+
+test("all card update, stale answer, settlement, delivery and restart orderings preserve safety", () => {
+  const result = enumerateCards();
+  assert.equal(result.paths, 5040);
+  assert.equal(result.actions, 7);
+  console.log(JSON.stringify(result));
+});
+
+test("card invariants catch stale accepted answers, lost delivery and replay divergence", () => {
+  const world = new World();
+  const spec = { key: "q", kind: "ask", title: "选", text: "原文", options: ["甲", "乙"] };
+  try {
+    world.call("createCard", spec);
+    world.call("createCard", { ...spec, text: "新文" }, true);
+    const original = world.call;
+    world.call = function (type, ...args) {
+      return type === "nextCard" ? null : original.call(this, type, ...args);
+    };
+    assert.throws(() => world.deliverAll(), /没有追上/);
+    world.call = original;
+    world.deliverAll();
+    const before = world.checked;
+    world.call("answer", 1, { choice: 0, version: 2 });
+    assert.throws(
+      () => invariants(world.view, world.log, before, { type: "answer", args: [1, { choice: 0, version: 1 }] }),
+      /旧内容/,
+    );
+    const changed = structuredClone(world.log);
+    changed.at(-1)!.changes.find((c) => c.table === "cards")!.row!.content_version = 1;
+    assert.throws(() => invariants(world.view, changed), /日志重放/);
+  } finally {
+    world.view.close();
+  }
 });
 
 test("bounded exhaustive schedules use two workers, two events and one card", () => {

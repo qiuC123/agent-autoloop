@@ -119,13 +119,16 @@ Order checked. We have enough stock in the warehouse.
     "title": "How should we ship it?",
     "text": "Both options can go out today.",
     "options": ["Courier", "Pickup"],
-    "key": "shipping"
+    "key": "shipping",
+    "input": "Other requests"
   }]
 }
 ```
 ````
 
 Besides `ask`, receipts can send notifications (`notice`), resolve open cards (`resolve`), schedule follow-up checks (`later`), and emit new events (`events`). If the JSON is invalid, the hub has the agent rewrite just that final message in the same session, without repeating completed work. If rewriting also fails, it keeps the original conclusion and tells you the receipt was not applied.
+
+Submitting an open `ask` / `notice` again with the same key and kind in the same thread updates that card when its content changes; identical content is not resent. Feishu and the card page accept both options and free text. Optional `input` sets the text field label (up to 20 Unicode code points), defaulting to “别的想法” (other thoughts). Answers carry the displayed version; outdated content is rejected with “卡片已更新，请重看” (the card has changed; please review it). Legacy channels may still omit the version; see the [protocol](docs/protocol.md#通道把卡片送到你面前) for compatibility.
 
 ## Ready-to-use recipes
 
@@ -175,9 +178,11 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 
 **Write your own.** Start from the runnable [agent](examples/plugins/hello-agent/agent.ts), [channel](examples/plugins/hello-channel/channel.ts), and [event](examples/plugins/hello-source/source.ts) templates and the [plugin guide](docs/plugins.md). For web tasks, read [browser access](docs/plugins.md#浏览器接入) first. The CLI and [MCP](skills/agent-autoloop/SKILL.md#mcp-与密钥撤销) can also inspect and answer cards.
 
+The Feishu channel requires **lark-cli 1.0.99 or newer** to read card JSON from standard input (`--content -`); version 1.0.96 does not support this argument. The new Feishu 2.0 text form and stale-answer feedback have been checked against official documentation and a fake CLI, but have not been verified with a live Feishu account.
+
 ## Four kernel mechanisms
 
-The kernel is about 1,650 lines with zero runtime dependencies. It reads no clock, uses no randomness, and makes no outbound requests; plugins connect in, and credentials stay with the plugins that use them. Identical inputs always give identical results. It brings four proven systems patterns to command-line agents:
+The kernel is about 1,700 lines with zero runtime dependencies. It reads no clock, uses no randomness, and makes no outbound requests; plugins connect in, and credentials stay with the plugins that use them. Identical inputs always give identical results. It brings four proven systems patterns to command-line agents:
 
 - **Zero-cost wait**: The process exits while waiting for your call, and the waiting state lives in SQLite, so the agent does not stay alive. If you reply three days later, no agent process runs and no tokens are spent in the meantime — only the lightweight hub waits in the background; your answer resumes the original conversation.
 - **Event sourcing**: All state is derived from an append-only fact log, committed in the same SQLite transaction as its indexes before the hub replies. Confirmed facts survive `SIGKILL` (whole-machine power loss is not separately tested), every run can be traced with a single command, and format changes rebuild from the log without migration scripts.

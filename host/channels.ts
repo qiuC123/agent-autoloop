@@ -6,6 +6,8 @@ import { loadPlugin } from "./plugins.ts";
 export type Card = {
   id: number;
   version: number;
+  content_version: number;
+  input: string | null;
   ref: string | null;
   kind: "ask" | "notice";
   state: "open" | "decided" | "done" | "closed";

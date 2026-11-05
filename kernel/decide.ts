@@ -32,7 +32,16 @@ const NOT_TRYING = { tries: 0, first_try_at: null, not_before: null };
 const NOT_DELIVERED: Row = { version: 0, ref: null, ...NOT_TRYING, error: null, given_up: 0 };
 
 const nulls = (...names: string[]) => Object.fromEntries(names.map((name) => [name, null]));
-const CARD_BASICS = { text: "", options: "[]", recommend: null, about: "", state: "open", fyi: 0, quiet: 0 };
+const CARD_BASICS = {
+  text: "",
+  options: "[]",
+  recommend: null,
+  about: "",
+  input: null,
+  state: "open",
+  fyi: 0,
+  quiet: 0,
+};
 const DEFAULTS: Partial<Record<Table, Row>> = {
   runs: {
     attempts: 0,
@@ -45,6 +54,7 @@ const DEFAULTS: Partial<Record<Table, Row>> = {
     lane: "",
     ...nulls("grp", "source", "agent", "session", "run_id", "answer_event"),
     version: 1,
+    content_version: 1,
     ...nulls("decided_at", "closed_at"),
   },
   deliveries: NOT_DELIVERED,
@@ -52,7 +62,7 @@ const DEFAULTS: Partial<Record<Table, Row>> = {
 
 type Given = { type: string; seq: number; now: number; at: string; env: Environment; rules: Rules };
 /** One input being decided: what holds throughout, and the view with its changes so far. */
-type Draft = Given & { view: View; changes: Change[] };
+type Draft = Given & { view: View; changes: Change[]; cards?: { card: number; action: string }[] };
 
 export function decide(view: View, input: Input, now: number, env: Environment): { facts: Fact[]; value: any } {
   const { type, args } = input;
@@ -71,8 +81,8 @@ export function decide(view: View, input: Input, now: number, env: Environment):
   return { facts: draft.changes.length ? [factOf(draft, draft.changes)] : [], value };
 }
 
-function factOf({ seq, now, type }: Draft, changes: Change[]): Fact {
-  return { version: 1, seq, at: now, type, changes };
+function factOf({ seq, now, type, cards }: Draft, changes: Change[]): Fact {
+  return { version: 1, seq, at: now, type, changes, ...(cards && { meta: { cards } }) };
 }
 
 function set(draft: Draft, table: Table, key: string | number, row: Row | null) {
@@ -114,10 +124,31 @@ function closeOpen(draft: Draft, matches: (key: string) => boolean, result: stri
 const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
 
-function createCard(draft: Draft, spec: Row) {
+function createCard(draft: Draft, spec: Row, update = false) {
   const cards = rows(draft.view, "cards", { key: spec.key, ...(!spec.once && { state: "open" }) }, 1, true);
   const existing = cards.findLast((card) => card.key === spec.key && (spec.once || card.state === "open"));
-  if (existing) return { card: existing.id, duplicate: true };
+  const content = {
+    title: spec.title,
+    text: spec.text ?? "",
+    options: JSON.stringify(spec.options ?? []),
+    recommend: spec.recommend ?? null,
+    about: spec.about ?? "",
+    input: spec.input ?? null,
+  };
+  const report = (card: number, action: string) => {
+    (draft.cards ??= []).push({ card, action });
+    return { card, duplicate: action === "duplicate", ...(action === "updated" && { updated: true }) };
+  };
+  if (existing) {
+    const changed = Object.entries(content).some(([key, value]) => existing[key] !== value);
+    if (!update || spec.once || existing.kind !== spec.kind || !changed) return report(existing.id, "duplicate");
+    const version = existing.version + 1;
+    put(draft, "cards", existing.id, { ...content, version, content_version: version });
+    // New content gets its own delivery attempts, retaining each channel's original message identity.
+    for (const delivery of rows(draft.view, "deliveries", { card_id: existing.id }))
+      put(draft, "deliveries", `${existing.id}:${delivery.channel}`, { ...NOT_TRYING, given_up: 0, error: null });
+    return report(existing.id, "updated");
+  }
   const { once, run, options, fyi, quiet, ...fields } = spec;
   const stored = {
     run_id: run ?? null,
@@ -126,7 +157,7 @@ function createCard(draft: Draft, spec: Row) {
     quiet: quiet ? 1 : 0,
   };
   const card = add(draft, "cards", { ...fields, ...stored, state: fyi ? "closed" : "open", created_at: draft.at });
-  return { card: card.id, duplicate: false };
+  return report(card.id, "created");
 }
 
 const notify = (draft: Draft, key: string, title: string, text: string, extra: Row = {}) =>
@@ -196,7 +227,7 @@ function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
   const quiet = kind === "notice" && ruleNamed(draft, run.rule)?.tell === "never";
   const origin = { source: sourceOf(draft.view, run.id), agent: run.agent, session, run: run.id };
   const key = `thread:${run.rule}:${run.lane}:${name}`;
-  createCard(draft, { ...card, hops: hopsOf(draft, run), key, kind, quiet, ...threadOf(run), ...origin });
+  createCard(draft, { ...card, hops: hopsOf(draft, run), key, kind, quiet, ...threadOf(run), ...origin }, true);
 }
 
 /** Notices what has gone quiet: a worker that stopped coming, a run its worker stopped mentioning. */
@@ -377,6 +408,9 @@ function answer(draft: Draft, id: number, given: Row) {
     const delivery = draft.view.get("deliveries", `${id}:${given.channel}`);
     if (!delivery?.ref || delivery.ref !== given.ref) throw new AuthError("不是发出去的那条消息");
   }
+  if (given.version !== undefined && (!Number.isSafeInteger(given.version) || given.version < 1))
+    throw new InputError("version 要是正整数");
+  if (given.version !== undefined && given.version < card.content_version) throw new Conflict("卡片已更新，请重看");
   if (card.state !== "open") return { changed: false, state: card.state };
   if (card.kind === "notice") {
     closeCard(draft, card, "已处理", given.by ?? null);

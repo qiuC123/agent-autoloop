@@ -140,7 +140,7 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
   "summary": "一句话", "error": "没跑成的原因", "session": "…",
   "usage": { "input": 0, "output": 0, "cached": 0, "cost": 0 },
   // 下面就是回执，一个事务里一次生效
-  "ask":     [{ "title", "text", "options": ["…", "…"], "recommend": 0, "about": "留给接着干的自己", "key": "这件事的固定名字" }],
+  "ask":     [{ "title", "text", "options": ["…", "…"], "recommend": 0, "about": "留给接着干的自己", "key": "这件事的固定名字", "input": "返工意见" }],
   "notice":  [{ "title", "text", "key" }],
   "resolve": [{ "card": 3, "reason": "在哪核实了已解决" }],
   "later":   [{ "key": "…", "at": "2026-11-05T09:00:00+08:00", "about": "到时候查什么" }, { "key": "…", "cancel": true }],
@@ -152,7 +152,10 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
 - `failed` 会重派，所以它只带 `notice`，其余的不生效。
 - 需要本人恢复连接、登录或身份验证时，用 `done` 结束本轮并交 `ask`，不交 `failed`。`done` 表示本轮结束，未完成的事项由卡片继续跟进，不代表网页已经验收。同一阻塞已有 `open` 卡片时不重复提问，不用 `later` 定时重试；`waiting` 里同一阻塞已有的复查用 `cancel` 取消。保留已完成业务，`about` 写清恢复后只做哪些剩余步骤。
 - `usage` 由接单程序上报本次执行的用量，包含这次执行的回执重写；每一项都可以没有：`input`、`output`、`cached` 是 Token 数，`cost` 是美元。中台把同一轮各次执行的已报数值相加，重复提交不重复计费；没有上报的字段保持缺省，不当成零。`agent-autoloop status` 按完成时间汇总今天和最近 7 天已结束的轮次，没上报的轮数如实写出来。升级不重算旧回执，升级前已经被覆盖的累计值不会自动补回。
-- `ask` 的 `key` 范围是这个事项：同一个 `key` 的卡片还开着就不再发。关掉之后再问是新的一次。
+- 回执 `ask` / `notice` 的 `key` 范围是这个事项。同 key、同 kind 的卡片还开着时，`title`、`text`、`options`、`recommend`、`about`、`input` 任一变化就更新原卡：`version` 加一，`content_version` 设为这个新版本。省略可选字段会清除旧值；内容相同不加版本、不重发。不同 kind 仍按重复处理；关闭后再交是新卡；`once` 通知及系统通知的行为不变。
+- 内容更新保留卡片编号、创建时间、回答链接和原提问的事项、会话归属，各通道保留原 `ref`，重新获得发送尝试（包括之前已放弃的通道）。恢复投递后追上最新版本；重试再次耗尽仍会放弃，首次送达前已经关闭的卡片仍不发。
+- 回执事实的 `meta.cards` 列出 `{card, action}`，`action` 为 `created`、`updated` 或 `duplicate`；重复提交同一回执不再写事实。严格校验日志的客户端需同步新版 schema，旧事实不要求有 `meta`。
+- `ask.input` 是可选的文字框标签，1–20 个 Unicode 码点，不能全是空白；不写时显示“别的想法”。卡片页与飞书都把它用作标签和提示，文字提交仍是 `{text}`。
 - `resolve` 只能结同来源、同组、这一轮领活前就有的卡片，越界的写进 `rejected`，不影响这一轮的结果。
 - `later` 的 `key` 范围是这个事项，同一个 `key` 再写一次就是改时间。
 - `events` 的来源由规则的 `emits` 决定，回执改不了。
@@ -204,8 +207,8 @@ export default {
 GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 → 200 { "card": null | Card }
 
-// Card：这张卡片现在的样子。内容创建后不变，只有状态会变
-{ "id": 56, "version": 2, "ref": null, "kind": "ask", "state": "open",
+// Card：这张卡片现在的样子。内容和状态都能更新；content_version 只随内容变化
+{ "id": 56, "version": 2, "content_version": 2, "input": "返工意见", "ref": null, "kind": "ask", "state": "open",
   "title": "…", "text": "…", "options": ["…", "…"], "recommend": 0,
   "choice": null, "answer": null, "result": null, "link": null }
 ```
@@ -214,7 +217,9 @@ GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 - 发完报告：`POST /v1/cards/56/delivered { "version": 2, "ref": "om_xxx" }`。没报告的过一分钟会再给你。**支持幂等键的平台，发新消息只用卡片编号，不带版本**。平台不支持时无法保证去重，Webhook 模板可能在报告丢失后重发。
 - 发不出去：`POST /v1/cards/56/failed { "version": 2, "error": "…" }`。第一次发送隔得越来越久地重试，一小时后放弃（卡片还开着，`agent-autoloop status` 看得到）；通道一直没来领不算在内。
 - 还没送达就已经解决的卡片不再打扰你。
-- 你点了：`POST /v1/cards/56/answer { "choice": 1, "by": "ou_xxx", "ref": "om_xxx" }`。只有第一次算数，`by` 要在这个通道的 `answerers` 里，`ref` 要和送达的那条一致。不带选项的通知有一个“已处理”按钮，点了就结案。
+- 你点了：`POST /v1/cards/56/answer { "choice": 1, "version": 2, "by": "ou_xxx", "ref": "om_xxx" }`。只有第一次算数，`by` 要在这个通道的 `answerers` 里，`ref` 要和送达的那条一致。送达时保存 `version`，回答时原样带回；文字回答用 `text` 替代 `choice`。不带选项的通知有一个“已处理”按钮，点了就结案。
+
+`answer.version` 可选，提供时必须是正的安全整数。身份与原消息核对通过后，小于当前 `content_version` 就返回 HTTP 409，`error` 为“卡片已更新，请重看”，不记录回答、不唤醒事项；仅状态变化不提高 `content_version`。省略版本保持旧行为，旧通道可逐步升级，但没有防止旧内容误答的保证。卡片页的每个表单都带隐藏 `version`；交互式 `try` 和 MCP 回答也可携带所显示版本。飞书选项与表单提交均携带版本，过期提示回复在原消息下，不因拒答重发整张卡片。
 
 最小的通道只要十几行：领卡片、发文字和 `link`、报告。`link` 只给配了 `"links": true` 的通道，其他通道这里是 `null`。它打开一个不跑脚本的普通表单页，这张卡片的文字和按钮都在上面，谁拿到链接谁就能答，有效期 7 天，适合只会发文字的群机器人、邮件。能发按钮、能收回调的通道（比如飞书）用按钮，身份由平台核验，更安全。一台电脑上用时 `link` 是本机地址，手机打不开，要手机批请把中台放到有公网地址的机器上，并配好 `publicUrl`。
 
@@ -224,7 +229,7 @@ GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 GET  /v1/state              Authorization: Bearer <本人的密钥>
 → 200 { "totals", "cards", "recentCards", "agents", "channels", "sources", "lines", "elsewhere", "runs", "nextBefore", "unrouted" }
 
-POST /v1/cards/56/answer    { "choice": 1 } 或 { "text": "别的想法" }
+POST /v1/cards/56/answer    { "choice": 1, "version": 2 } 或 { "text": "别的想法", "version": 2 }
 POST /v1/cards/56/resolve   { "reason": "不用决定了，因为……" }
 POST /v1/runs/12/cancel     {}
 ```
@@ -288,7 +293,7 @@ Node 请求转换层保持在 50 行内；文件、SQLite 连接、监听和定�
 
 插件入口统一为 `plugins/<名字>/agent.ts`、`channel.ts` 或 `source.ts`，先找安装目录，再找引擎内置目录。`agent-autoloop add <git 地址>` 将插件仓库克隆到安装目录的 `plugins/<仓库名>`，仓库根目录直接放入口文件，不自动更新，不执行安装脚本。插件是本人安装的可信代码，事件不能指定插件路径。
 
-事件接受可选的 `hops`，非负安全整数，缺省为 0。回执事件强制使用本轮所有事件最大 hops 加 1；提问的回答和 later 定时延续原深度。超过 8 的事件仍记录但不派发，并产生通知；重复提交不重复通知。这是中台内处理链的限制，外部来源直接发出的新事件可以从 0 开始。旧日志没有 hops 时按 0 读取。
+事件接受可选的 `hops`，非负安全整数，缺省为 0。回执事件强制使用本轮所有事件最大 hops 加 1；提问的回答和 later 定时延续原深度。超过 8 的事件仍记录但不派发，并产生通知；重复提交不重复通知。这是中台内处理链的限制，外部来源直接发出的新事件可以从 0 开始。旧日志没有 hops 时按 0 读取。旧卡片缺少 `content_version` 时重放为 1（创建版本，不取当前状态版本），缺少 `input` 时为 `null`。投影格式指纹变化触发现有的自动重建，不改旧日志，也不写迁移。
 
 `DELETE /v1/keys/<source|worker|channel|owner>/<名字>` 只接受本人密钥，返回 `{ok:true}`。`agent-autoloop key remove <种类> <名字>` 调用正在运行的中台，删除立即唤醒并拒绝该密钥的长轮询，关闭日志订阅。已领取的一轮继续用独立的轮次 token 交结果。
 
@@ -296,9 +301,9 @@ Node 请求转换层保持在 50 行内；文件、SQLite 连接、监听和定�
 
 文字上限按 Unicode 码点计算。`usage` 必须是数值非负且有限的对象，不能是数组；`later.at` 必须是真实日期的 ISO 日期时间，带 `Z` 或时区偏移。回执先核验整体，再执行。
 
-`npm test` 包含种子 24301 的 200000 步模拟，以及两台接单程序、两条来源事件、一张问题卡片的全部 8! 种动作顺序。模拟每 128 步换一个独立场景，每个场景结束前停止故障并把工作处理完；每次状态转换都检查不变量和完整日志重放。定时事件由真实到期表触发，恢复后检查到期任务没有遗留。它证明这些有限场景，不代表任意大小状态空间已被穷尽。单独复现：`node sim/random.ts 24301 200000`、`node sim/enumerate.ts`。
+`npm test` 包含种子 24301 的 200000 步模拟，以及两台接单程序、两条来源事件、一张问题卡片的全部 8!（40320）种动作顺序；另检查卡片更新、旧版本回答、当前版本文字回答、结案、两通道投递、重启的全部 7!（5040）种顺序。模拟每 128 步换一个独立场景，每个场景结束前停止故障并把工作处理完；每次状态转换都检查不变量和完整日志重放；随机动作包含同 key 内容更新与旧版本回答，核对带版本的已接受回答不早于当时的内容版本、恢复后可投递的更新在各通道追上最新版。定时事件由真实到期表触发，恢复后检查到期任务没有遗留。它证明这些有限场景，不代表任意大小状态空间已被穷尽。单独复现：`node sim/random.ts 24301 200000`、`node sim/enumerate.ts`。
 
-`npm run test:nightly` 做 1000 次真进程 SIGKILL、25 处可执行的内核变异和性能检查。崩溃用真 SQLite WAL + FULL，核对已确认序号、完整性、视图、重放和重复提交；它测进程退出，不模拟整机断电。变异漏过的名字和比例直接输出，不能用语法错误算检出。`node sim/crash.ts 1000 12648430` 和 `node sim/mutate.ts` 可分别复现。
+`npm run test:nightly` 做 1000 次真进程 SIGKILL、34 处可执行的内核变异和性能检查。崩溃用真 SQLite WAL + FULL，核对已确认序号、完整性、视图、重放和重复提交；它测进程退出，不模拟整机断电。变异漏过的名字和比例直接输出，不能用语法错误算检出。`node sim/crash.ts 1000 12648430` 和 `node sim/mutate.ts` 可分别复现。
 
 模拟的正确性检查必须通过；模拟速度只是开发效率的观察指标。性能检查使用逐条 HTTP 写入，事务落盘后才应答。空闲 RSS 和千连接负载 RSS 分开测；检查实现见 `scripts/metrics.ts`，实测数字见 README。Windows 只报告性能数字，不按 M5 预算判定；POSIX 预算检查不变，所有平台仍需通过 1000 个真实同时等待连接及成功响应等正确性检查。大历史量（结果见[历史增长实测](#历史增长实测)）用 `node scripts/history.ts 1000 10000 100000` 验证真实业务、HTTP 响应、慢速日志订阅、强杀重试和完整重建；每个场景含两轮任务、提问、投递、回答和定时复查，逐笔 WAL + FULL 提交。请求走真实 HTTP，每类操作测 30 次取中位数，状态汇总测一次；持续写入、空闲及请求负载内存分别报告，不手动触发 GC。
 

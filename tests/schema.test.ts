@@ -1,10 +1,28 @@
 // Failure modes: published schemas accept an impersonated source, malformed receipts, or credentials in event data;
 // the wire contract drifts from the validators, and conformance accepts a server that opens the wrong door.
 // Required job structure and inherited object names must not bypass schema checks; Unicode limits count code points.
+// Input labels must agree with receipt validation and answer versions must be positive safe integers.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkSchema } from "../protocol/schema.ts";
 import { parseEvent, parseResult } from "../protocol/validate.ts";
+
+test("input labels accept up to 20 code points and answer versions are optional positive safe integers", () => {
+  for (const input of [undefined, "返工意见", "😀".repeat(20), "", " ", "😀".repeat(21), null, 7]) {
+    const valid = input === undefined || (typeof input === "string" && input.trim() !== "" && [...input].length <= 20);
+    const result = {
+      outcome: "done",
+      ask: [{ title: "选", text: "内容", options: ["甲", "乙"], ...(input !== undefined && { input }) }],
+    };
+    assert.equal(checkSchema("result", result).length === 0, valid);
+    if (valid) assert.doesNotThrow(() => parseResult(result));
+    else assert.throws(() => parseResult(result));
+  }
+  for (const version of [undefined, 1, 7, 0, -1, 1.1, "1", null, Number.MAX_SAFE_INTEGER + 1]) {
+    const valid = version === undefined || (Number.isSafeInteger(version) && Number(version) > 0);
+    assert.equal(checkSchema("answer", { choice: 0, ...(version !== undefined && { version }) }).length === 0, valid);
+  }
+});
 
 test("wire schemas agree with event and receipt boundaries", () => {
   for (const input of [

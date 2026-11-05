@@ -1,6 +1,7 @@
 // Failure modes: a different hub accepts the wrong key, drops idempotent receipts, loses answers or emits an invalid wire
 // object; the address-based conformance runner succeeds against a server that grants every caller access, or an unrelated
 // scheduled run takes the work claim intended to verify an answer.
+// A hub that ignores submitted answer versions must not pass conformance.
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -56,6 +57,18 @@ test("conformance rejects an implementation that opens the wrong door", async ()
 test("the same isolated hub can be checked twice", async () => {
   await conformance(base, config);
   await conformance(base, config);
+});
+
+test("conformance rejects a hub that ignores answer versions", async () => {
+  const wrong: typeof fetch = async (input, init) => {
+    if (String(input).endsWith("/answer") && typeof init?.body === "string") {
+      const body = JSON.parse(init.body);
+      delete body.version;
+      return fetch(input, { ...init, body: JSON.stringify(body) });
+    }
+    return fetch(input, init);
+  };
+  await assert.rejects(() => conformance(base, config, wrong), /状态码/);
 });
 test("conformance checks another actual run rather than a missing id", async () => {
   const jobs = new Map<number, string>();

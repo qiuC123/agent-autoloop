@@ -38,6 +38,8 @@ Windows 的 Codex 插件会用当前配置的 `codex sandbox` 探测工具实际
 
 Windows 用当前用户登录时启动的计划任务常驻，不需要管理员权限；日志在 `~/.agent-autoloop/logs/up.log`。安装时保留终端的 PATH 和 Agent 配置目录，沿用本人登录；修改它们后重新运行 `agent-autoloop service install`。用 `--no-service` 安装时，在终端运行 `agent-autoloop up`。`agent-autoloop service status` 查看常驻状态，`service stop` 停止中台并保留下次登录启动，`service remove` 停止并移除计划任务。停止单轮用 `agent-autoloop stop <轮次>`，它会停掉整棵 Agent 进程树。Shell 示例需在对应的 shell 中运行，Windows 原生命令脚本用明确的 `node.exe` / `.exe` 和参数。
 
+Windows 接单程序由 `up` 启动为独立子进程，避免同步命令阻塞中台或与通道子进程串用管道句柄。超过 30 秒没完成初始化，或之后超过 120 秒没有处理进度，`up` 会记下原因并以非零状态退出，让计划任务重启；接单子进程随之回收，已有独立 Agent 留给重启后恢复。前台运行需自行重启，详见[协议](docs/protocol.md)。
+
 三个平台的 `agent-autoloop service install` 都会记住 `AGENT_AUTOLOOP_RULES` 指定的自定义规则路径，并显示其绝对路径；修改或取消设置后重新安装服务即可更新。
 
 装好后用你本机的 Agent 真实走一遍“提问 → 退出等回复 → 拍板 → 接着干完”：
@@ -129,6 +131,8 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 ````
 
 除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效。
+
+只是告诉你、不需要你做事时，写 `{"notice":[{"title":"已交给 Agent","text":"结果会用卡片告诉你","key":"handoff","fyi":true}]}`。它复用运行报告卡片，没有按钮，从创建起就不算待办，也不进后续 Agent 的 `context.open`；同 key 可以更新原消息。要你亲自做事才用普通 `notice`，仍有“已处理”按钮。两者各自独立，旧卡片不变；首发时限和升级兼容见[协议](docs/protocol.md#agent领活干活交回执)。
 
 同一事项再次提交同 key、同类型的未关闭 `ask` / `notice` 时，内容有变化就更新原卡，相同内容不再发送。飞书和卡片页既能选选项，也能输入文字；可选的 `input` 设置文字框标签，最多 20 个字，默认“别的想法”。回答带所见版本；卡片内容已更新时会提示“卡片已更新，请重看”。旧通道不传版本仍可使用，升级兼容见[协议](docs/protocol.md#通道把卡片送到你面前)。
 

@@ -3,10 +3,49 @@
 // Required job structure and inherited object names must not bypass schema checks; Unicode limits count code points.
 // Input labels must agree with receipt validation and answer versions must be positive safe integers.
 // The optional job.rule.ask permission must remain boolean on the wire.
+// A truthy non-boolean FYI flag must not silently hide an actionable notice.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkSchema } from "../protocol/schema.ts";
 import { parseEvent, parseResult } from "../protocol/validate.ts";
+
+test("notice fyi is optional and strictly boolean in both validators", () => {
+  for (const fyi of [undefined, false, true, null, 0, 1, "true", [], {}]) {
+    const result = {
+      outcome: "done",
+      notice: [{ title: "进度", text: "已交出", ...(fyi === undefined ? {} : { fyi }) }],
+    };
+    const valid = fyi === undefined || typeof fyi === "boolean";
+    assert.equal(checkSchema("result", result).length === 0, valid);
+    if (valid) assert.doesNotThrow(() => parseResult(result));
+    else assert.throws(() => parseResult(result));
+  }
+  const card = {
+    id: 1,
+    version: 1,
+    kind: "notice",
+    state: "closed",
+    title: "进度",
+    text: "已交出",
+    options: [],
+    ref: null,
+    recommend: null,
+    choice: null,
+    answer: null,
+    by: null,
+    result: null,
+    link: null,
+    fyi: true,
+  };
+  assert.deepEqual(checkSchema("card", card), []);
+  for (const invalid of [
+    { fyi: "true" },
+    { state: "open" },
+    { options: ["已处理"] },
+    { kind: "ask", options: ["甲", "乙"] },
+  ])
+    assert.ok(checkSchema("card", { ...card, ...invalid }).length);
+});
 
 test("input labels accept up to 20 code points and answer versions are optional positive safe integers", () => {
   for (const input of [undefined, "返工意见", "😀".repeat(20), "", " ", "😀".repeat(21), null, 7]) {

@@ -169,6 +169,10 @@
         "key": {
           "type": "string",
           "maxLength": 100
+        },
+        "fyi": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": ["title", "text"],
@@ -620,6 +624,10 @@
           "maxLength": 20,
           "minLength": 1,
           "pattern": "\\S"
+        },
+        "fyi": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -656,6 +664,32 @@
           "properties": {
             "kind": {
               "const": "notice"
+            }
+          }
+        }
+      ],
+      "anyOf": [
+        {
+          "properties": {
+            "fyi": {
+              "const": false
+            }
+          }
+        },
+        {
+          "required": ["fyi"],
+          "properties": {
+            "fyi": {
+              "const": true
+            },
+            "kind": {
+              "const": "notice"
+            },
+            "state": {
+              "const": "closed"
+            },
+            "options": {
+              "maxItems": 0
             }
           }
         }

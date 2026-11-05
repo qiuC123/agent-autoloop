@@ -69,11 +69,12 @@ export function promptFor(job: Job, contextFile: string) {
       : `{"ask":[{"title":"一句话说要决定什么","text":"三行以内","options":["选项一","选项二"],"recommend":0,\
 "about":"留给接着干的自己：背景，每个选项具体怎么做","key":"这件事的固定名字","input":"可选的文字框标签，最多20字"}],\n`) +
       `\
- "notice":[{"title":"一句话","text":"非他亲自做不可的事：要他做什么"}],
+ "notice":[{"title":"一句话","text":"需要他亲自做的事：要他做什么"}],
  "resolve":[{"card":12,"reason":"在哪核实了已解决或本人已决定"}],
  "later":[{"key":"这次复查的固定名字","at":"带时区的时间，比如 2026-11-05T09:00:00+08:00",\
 "about":"到时候查什么、怎么算过"}]${emits}}`,
     "```",
+    '- 只是让人知道、不需要人做事时，在 notice 里加 "fyi":true；它没有按钮，不进 open，也不需要 resolve。要人亲自做事才用普通 notice（不写 fyi 或写 false）。',
     (rule.ask === false ? "- notice" : "- ask 和 notice") +
       " 会打断人，能不发就不发。写给不看代码、也看不到这一轮对话的人：" +
       "出了什么事，现在恢复没有，有什么影响，要他做什么或你的建议。不写技术缩写、状态码、文件路径和内部编号。",

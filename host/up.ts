@@ -1,9 +1,9 @@
-// Everything this machine does, in one process: the hub, the worker and its channels, whichever config.json says. They
+// Everything this machine does: the hub, the worker and its channels, whichever config.json says. They
 // speak the same protocol to each other here as they would across the world. A stop leaves agents running: they're
 // detached, and the worker finds them again when it's back.
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
-import { SHARE_ENV, Worker } from "node:worker_threads";
+import { fork } from "node:child_process";
 import { loadChannel } from "./channels.ts";
 import { readConfig, type ChannelConfig } from "./config.ts";
 import { HOME } from "./home.ts";
@@ -87,16 +87,48 @@ export async function up() {
   }
   if (config.worker) {
     if (process.platform === "win32") {
-      // Synchronous ACL and Job Object preparation must not starve the hub's sockets and timers.
-      const worker = new Worker(new URL("../worker/thread.ts", import.meta.url), {
-        workerData: { url: config.url, ...config.worker },
-        // A copied worker environment loses Windows' case-insensitive Path/SystemRoot lookup.
-        env: SHARE_ENV,
+      // Separate handle tables prevent channel children inheriting synchronous worker command pipes.
+      // Non-detached children belong to libuv's Windows Job and die with up, even during a native call.
+      const worker = fork(new URL("../worker/process.ts", import.meta.url), {
+        windowsHide: true,
+        stdio: ["ignore", "inherit", "inherit", "ipc"],
       });
       jobs.push(
         new Promise<void>((_resolve, reject) => {
-          worker.once("error", reject);
-          worker.once("exit", (code) => reject(new Error(`接单线程退出了（${code}）`)));
+          let ready = false;
+          let timer: NodeJS.Timeout;
+          const arm = (ms: number) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+              try {
+                writeSync(
+                  2,
+                  `${new Date().toISOString()} [worker] 接单进程${ready ? "心跳" : "启动"}超时，退出等待服务重启\n`,
+                );
+              } finally {
+                process.kill(process.pid, "SIGKILL");
+              }
+            }, ms);
+          };
+          arm(30_000);
+          worker.on("message", (message) => {
+            if (message === "booted") {
+              worker.send({ url: config.url, ...config.worker }, (error) => {
+                if (error) failed(error);
+              });
+            } else if (message === "ready" && !ready) {
+              ready = true;
+              arm(120_000);
+            } else if (message === "heartbeat" && ready) {
+              arm(120_000);
+            }
+          });
+          const failed = (error: Error) => {
+            clearTimeout(timer);
+            reject(error);
+          };
+          worker.once("error", failed);
+          worker.once("exit", (code, signal) => failed(new Error(`接单进程退出了（${code ?? signal}）`)));
         }),
       );
     } else {

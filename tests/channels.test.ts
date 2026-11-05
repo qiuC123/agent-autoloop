@@ -5,6 +5,7 @@
 // identifier reaches the subject; a ping makes an event; replacement tokens in card text rewrite a webhook template.
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
 // Text submits must use form_value; stale answers must notify at the original message without patching the card.
+// FYIs must render only information, without any callback, form or acknowledgement button.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -53,6 +54,15 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.match(said({ ...base, state: "decided", answer: "归档" }), /你选了「归档」/);
   assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
+});
+
+test("FYIs render as text without any interaction, including content updates", () => {
+  for (const version of [1, 2]) {
+    const card = { ...base, kind: "notice" as const, state: "closed" as const, fyi: true, options: [], version };
+    const shown = JSON.stringify(render(card));
+    assert.ok(shown.includes(card.text));
+    assert.doesNotMatch(shown, /callback|button|form|input|interactive_container|已处理|不用决定/);
+  }
 });
 
 test("open questions have a named form with a versioned submit and an optional plain-text input label", () => {
@@ -328,6 +338,8 @@ test("a webhook channel posts words and the link once, and has nothing to do for
     { ...base, text: literal },
     { ...base, version: 2, ref: "sent-5", state: "decided", choice: 0 },
     { ...base, id: 7 },
+    { ...base, id: 8, kind: "notice", state: "closed", fyi: true, options: [], title: "进度", text: "已交出" },
+    { ...base, id: 8, kind: "notice", state: "closed", fyi: true, options: [], version: 2, ref: "sent-8" },
   ];
   const calls: unknown[][] = [];
   const hub = {
@@ -358,13 +370,16 @@ test("a webhook channel posts words and the link once, and has nothing to do for
     signal: stop.signal,
   });
   target.close();
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
+  assert.equal(seen[2].text.content, "进度\n\n已交出");
   assert.equal(seen[0].text.content, `${base.title}\n\n${literal}\n\n1. 删\n2. 留着\n\n${base.link}`);
   assert.match(seen[0].text.content, /要不要删[\s\S]*1\. 删[\s\S]*https:\/\/hub\.test\/c\/x/);
   assert.deepEqual(calls, [
     ["delivered", 5, 1, "sent-5"],
     ["delivered", 5, 2, "sent-5"],
     ["failed", 7, 1],
+    ["delivered", 8, 1, "sent-8"],
+    ["delivered", 8, 2, "sent-8"],
   ]);
 });
 

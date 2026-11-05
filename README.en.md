@@ -38,6 +38,8 @@ Windows uses a scheduled task triggered when the current user signs in, without 
 
 On Windows, the Codex plugin probes the actual sandbox user SID with the current `codex sandbox` configuration. Only the turn's `agent/` data directory is shared: read access for `read`, read/write for the default `edit`. Hub databases, keys, configuration and worker control records remain owner-only. No user group is granted access, and the plugin never switches to `full`.
 
+On Windows, `up` runs its worker in a child process, isolating synchronous commands from the hub event loop and channel child-process handles. If the worker does not initialize within 30 seconds or stops making progress for 120 seconds, `up` logs the reason and exits nonzero so the scheduled task can restart it. The worker child is reaped with `up`; detached agents remain available for recovery. Foreground runs need a manual restart; see the [protocol](docs/protocol.md).
+
 On all three platforms, `agent-autoloop service install` remembers a custom rules path set with `AGENT_AUTOLOOP_RULES` and prints its absolute path; reinstall after changing or unsetting the variable to update the service.
 
 Then run a real loop with your own agent — ask, exit while it waits, make the call, resume:
@@ -131,6 +133,8 @@ Order checked. We have enough stock in the warehouse.
 ````
 
 Besides `ask`, receipts can send notifications (`notice`), resolve open cards (`resolve`), schedule follow-up checks (`later`), and emit new events (`events`). If the JSON is invalid, the hub has the agent rewrite just that final message in the same session, without repeating completed work. If rewriting also fails, it keeps the original conclusion and tells you the receipt was not applied.
+
+For information that needs no human action, write `{"notice":[{"title":"Handed off to the agent","text":"The result will arrive as a card","key":"handoff","fyi":true}]}`. This reuses the existing report card: no buttons, closed from creation, excluded from pending counts and `context.open`, with same-key content updates. Ordinary `notice` still means the owner must do something and retains its acknowledgement button. FYIs and actionable cards have separate lifecycles; old cards are unchanged. The existing 24-hour first-delivery window applies, measured from creation even after edits; delivered messages can still update later. Upgrade both hub and worker before using `fyi`; older versions reject the new receipt field. See the [protocol](docs/protocol.md#agent领活干活交回执).
 
 Submitting an open `ask` / `notice` again with the same key and kind in the same thread updates that card when its content changes; identical content is not resent. Feishu and the card page accept both options and free text. Optional `input` sets the text field label (up to 20 Unicode code points), defaulting to “别的想法” (other thoughts). Answers carry the displayed version; outdated content is rejected with “卡片已更新，请重看” (the card has changed; please review it). Legacy channels may still omit the version; see the [protocol](docs/protocol.md#通道把卡片送到你面前) for compatibility.
 

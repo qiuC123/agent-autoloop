@@ -1,5 +1,6 @@
 // Failure modes: faults lose accepted events, duplicate execution or answers, exceed parallel limits, change receipts,
 // diverge from replay, or strand work after recovery; an enumerator silently skips one ordering; mutation checks do not run.
+// FYIs must never acquire pending work, buttons or answer events, including after replay.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { simulate } from "../sim/random.ts";
@@ -12,7 +13,7 @@ import { invariants } from "../sim/invariants.ts";
 test("200000 deterministic fault steps preserve safety and recovered work terminates", () => {
   const result = simulate(0x5eed, 200000);
   assert.equal(result.steps, 200000);
-  for (const fault of ["lost", "duplicate", "restart", "offline", "channel", "clock", "update", "staleAnswer"])
+  for (const fault of ["lost", "duplicate", "restart", "offline", "channel", "clock", "update", "staleAnswer", "fyi"])
     assert.ok(result.faults[fault] > 0, fault);
   assert.ok(result.completed > 0);
   console.log(JSON.stringify(result));
@@ -47,6 +48,24 @@ test("card invariants catch stale accepted answers, lost delivery and replay div
     const changed = structuredClone(world.log);
     changed.at(-1)!.changes.find((c) => c.table === "cards")!.row!.content_version = 1;
     assert.throws(() => invariants(world.view, changed), /日志重放/);
+  } finally {
+    world.view.close();
+  }
+});
+
+test("FYI invariants reject a replayable log that turns information into pending work", () => {
+  const world = new World();
+  try {
+    world.call("createCard", { key: "progress", kind: "notice", title: "进度", text: "已交出", fyi: true });
+    world.restart();
+    const log = structuredClone(world.log);
+    log.at(-1)!.changes.find((change) => change.table === "cards")!.row!.state = "open";
+    const corrupted = evolve(empty(), log);
+    try {
+      assert.throws(() => invariants(corrupted, log), /只告知的卡片不能变成待办/);
+    } finally {
+      corrupted.close();
+    }
   } finally {
     world.view.close();
   }

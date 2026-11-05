@@ -10,6 +10,7 @@ export type Card = {
   input: string | null;
   ref: string | null;
   kind: "ask" | "notice";
+  fyi?: boolean;
   state: "open" | "decided" | "done" | "closed";
   title: string;
   text: string;

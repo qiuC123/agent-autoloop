@@ -1,7 +1,7 @@
 // Everything this machine does, in one process: the hub, the worker and its channels, whichever config.json says. They
 // speak the same protocol to each other here as they would across the world. A stop leaves agents running: they're
 // detached, and the worker finds them again when it's back.
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 import { loadChannel } from "./channels.ts";
@@ -95,8 +95,37 @@ export async function up() {
       });
       jobs.push(
         new Promise<void>((_resolve, reject) => {
-          worker.once("error", reject);
-          worker.once("exit", (code) => reject(new Error(`接单线程退出了（${code}）`)));
+          let ready = false;
+          let timer: NodeJS.Timeout;
+          const arm = (ms: number) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+              // process.exit waits for a worker stuck in native spawnSync; kill only this process, not detached agents.
+              try {
+                writeSync(
+                  2,
+                  `${new Date().toISOString()} [worker] 接单线程${ready ? "心跳" : "启动"}超时，退出等待服务重启\n`,
+                );
+              } finally {
+                process.kill(process.pid, "SIGKILL");
+              }
+            }, ms);
+          };
+          arm(30_000);
+          worker.on("message", (message) => {
+            if (message === "ready" && !ready) {
+              ready = true;
+              arm(120_000);
+            } else if (message === "heartbeat" && ready) {
+              arm(120_000);
+            }
+          });
+          const failed = (error: Error) => {
+            clearTimeout(timer);
+            reject(error);
+          };
+          worker.once("error", failed);
+          worker.once("exit", (code) => failed(new Error(`接单线程退出了（${code}）`)));
         }),
       );
     } else {

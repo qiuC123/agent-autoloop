@@ -45,6 +45,8 @@ $env:AGENT_AUTOLOOP_REPO = 'C:/code/agent-autoloop'
 
 `--agent claude` 选择 Claude Code；只有其他 CLI 时加 `--command 'hermes chat -q {prompt}'`。不指定时会检测本机安装的 Agent，第一种作为试跑对象。
 
+Windows 接单线程初始化超过 30 秒或处理进度心跳中断超过 120 秒时，`up` 会记录原因并强制以非零状态退出，触发计划任务的失败重启。只结束中台进程，独立 Agent 留给重启恢复。前台 `up` 需要自行重新运行；不修改现有计划任务设置。
+
 程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`（Windows 的 `~` 是 `USERPROFILE`）。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；Windows 生成 `.cmd` 入口，不修改系统 PATH，没有位置时使用安装器打印的完整路径。
 
 安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。

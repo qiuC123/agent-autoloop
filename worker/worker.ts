@@ -76,6 +76,8 @@ export type WorkerOptions = {
   unreachable?: string[];
   wait?: number;
   now?: () => number;
+  /** Initialization and loop progress, not an independent timer that could hide a stuck operation. */
+  progress?: () => void;
 };
 
 function save(entry: Entry) {
@@ -164,6 +166,7 @@ export function createWorker({
   unreachable,
   wait = WAIT,
   now = Date.now,
+  progress,
 }: WorkerOptions) {
   let claim = randomUUID();
   let unreachableSince: number | null = null;
@@ -458,8 +461,14 @@ export function createWorker({
 
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
-    for (const entry of entries()) await check(entry);
-    for (const entry of entries()) await settle(entry);
+    for (const entry of entries()) {
+      await check(entry);
+      progress?.();
+    }
+    for (const entry of entries()) {
+      await settle(entry);
+      progress?.();
+    }
     const held = entries();
     let reachable = true;
     try {
@@ -469,6 +478,7 @@ export function createWorker({
         running: held.map((entry) => entry.run),
         capacity: held.length < capacity,
       });
+      progress?.();
       for (const id of answer?.cancel ?? []) {
         const entry = held.find((entry) => entry.run === id);
         if (entry) stop(entry, "cancel");
@@ -481,6 +491,7 @@ export function createWorker({
       log(`couldn't reach the hub: ${error}`);
       reachable = false;
     }
+    progress?.();
     watchHub(reachable, now());
     return reachable;
   }
@@ -497,8 +508,11 @@ export function createWorker({
   async function run(signalled: AbortSignal) {
     log(`worker ${name} started`);
     tidy();
+    progress?.();
     while (!signalled.aborted) {
-      if (!(await tick())) await new Promise((resolve) => setTimeout(resolve, PAUSE));
+      const reachable = await tick();
+      progress?.();
+      if (!reachable) await new Promise((resolve) => setTimeout(resolve, PAUSE));
     }
   }
 

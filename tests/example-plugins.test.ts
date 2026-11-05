@@ -250,8 +250,11 @@ syncBuiltinESMExports();`,
   const preloadArgs = process.platform === "win32" ? ["--import", pathToFileURL(preload).href] : [];
   const up = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", ...preloadArgs, CLI, "up"], {
     env: { ...cleanEnv(), AGENT_AUTOLOOP_HOME: home, SHELL: "/bin/sh" },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let output = "";
+  up.stdout.on("data", (chunk) => (output += chunk));
+  up.stderr.on("data", (chunk) => (output += chunk));
   const stream = new AbortController();
   try {
     await until("中台启动", () =>
@@ -282,6 +285,8 @@ syncBuiltinESMExports();`,
       facts += decoder.decode((await reader.read()).value, { stream: true });
       return /"type":"delivered"/.test(facts);
     });
+  } catch (error) {
+    throw new Error(`示例闭环失败\n${output}`, { cause: error });
   } finally {
     stream.abort();
     up.kill("SIGTERM");

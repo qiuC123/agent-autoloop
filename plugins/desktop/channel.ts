@@ -14,10 +14,12 @@ const APPLESCRIPT = ["on run argv", "display notification (item 2 of argv) with 
 /**
  * Card text is data: `--` protects Unix arguments; base64 arguments keep Windows text out of PowerShell syntax.
  */
-export function notifyCommand(title: string, platform: string = process.platform): [string, string[]] {
+export function notifyCommand(title: string, platform: string = process.platform, fyi = false): [string, string[]] {
   if (title.includes("\0")) throw new TypeError("通知标题不能包含空字符");
   const body = `${title}\n${WORDS}`;
-  if (platform === "darwin") return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", TITLE, body]];
+  const heading = fyi ? "Agent 告诉你一件事" : TITLE;
+  if (platform === "darwin")
+    return ["osascript", [...APPLESCRIPT.flatMap((line) => ["-e", line]), "--", heading, body]];
   if (platform === "win32")
     return [
       "powershell.exe",
@@ -30,11 +32,11 @@ export function notifyCommand(title: string, platform: string = process.platform
         "Bypass",
         "-File",
         join(import.meta.dirname, "notify.ps1"),
-        Buffer.from(TITLE).toString("base64"),
+        Buffer.from(heading).toString("base64"),
         Buffer.from(body).toString("base64"),
       ],
     ];
-  return ["notify-send", ["--", TITLE, body]];
+  return ["notify-send", ["--", heading, body]];
 }
 
 function hasDesktop() {
@@ -46,8 +48,8 @@ function hasDesktop() {
 }
 
 /** Not the sync call the other channels get away with: this runs in the hub's own process, and may wait on a dialog. */
-function show(title: string) {
-  const [program, args] = notifyCommand(title);
+function show(card: Card) {
+  const [program, args] = notifyCommand(card.title, process.platform, card.fyi);
   const [executable, ...argv] = command(program, args);
   return new Promise<void>((resolve, reject) => {
     execFile(executable, argv, { timeout: 30_000, windowsHide: true }, (error) => (error ? reject(error) : resolve()));
@@ -76,7 +78,7 @@ export default async function desktop({ hub, log, signal }: ChannelContext) {
       continue;
     }
     try {
-      await show(card.title);
+      await show(card);
       await hub.delivered(card.id, card.version, `shown-${card.id}`);
     } catch (error) {
       log(`卡片 ${card.id} 的桌面通知没发出：${error}`);

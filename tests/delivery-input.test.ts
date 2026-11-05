@@ -1,6 +1,7 @@
 // Failure modes: event prose chooses a repository or command; a different PR's event is delivered; owner questions leak
 // source code/logs instead of readable text or become empty; attended reviews send duplicate notices;
 // polling changes ids on each read and produces duplicate deliveries.
+// Findings that require a fix must remain actionable notices rather than FYIs.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { subjectNumber, question, pendingEvents, deliveryReceipt } from "../plugins/delivery/input.ts";
@@ -46,4 +47,5 @@ test("attended findings stay in the receipt without creating a second notice", (
   const unattended = deliveryReceipt(1, result, false);
   assert.ok(unattended.includes('"notice"'));
   assert.ok(unattended.includes("数据会丢"));
+  assert.ok(!unattended.includes('"fyi":true'));
 });

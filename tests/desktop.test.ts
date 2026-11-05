@@ -5,6 +5,7 @@
 // to a program stops the channel, or isn't reported; a slow notifier freezes the hub, which shares its process; init doesn't
 // set the channel up in both files, or changes a rules file already there; doctor says there's no channel when there is one,
 // or that one reaches you when none does.
+// Informational cards must not be announced as questions.
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -169,6 +170,15 @@ test("a new card notifies once with its title; an update only reports", async ()
     ["delivered", 5, 1, "shown-5"],
     ["delivered", 5, 2, "shown-5"],
   ]);
+});
+
+test("an FYI announces information, and its update does not notify again", async () => {
+  const fake = standIns();
+  const card: Card = { ...base, kind: "notice", state: "closed", fyi: true, options: [] };
+  const { reports } = await deliver([card, { ...card, version: 2, ref: "shown-5" }]);
+  assert.equal(fake.calls().length, 1);
+  assert.deepEqual(fake.calls()[0].slice(-2), ["Agent 告诉你一件事", body(card.title)]);
+  assert.equal(reports.length, 2);
 });
 
 const marker = join(dir, "ran");

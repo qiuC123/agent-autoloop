@@ -5,6 +5,7 @@
 // rewritten; the receipt isn't found when the message says something after it, or a code block of another kind is taken for
 // one; a result longer than the hub takes is sent as it is; a browser/login block is reported as retryable failure.
 // A rule forbidding ask must not be prompted to ask, including examples and owner-only blocks.
+// Informational receipts must be explained and parsed without inventing work for the owner.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "../worker/contract.ts";
@@ -64,9 +65,17 @@ test("the prompt says what to do and how to end, but not what anyone wrote", () 
   assert.match(text, /没事可做：/);
   assert.match(text, /```agent-autoloop/);
   assert.match(text, /"input".*20/);
+  assert.match(text, /只是让人知道、不需要人做事.*fyi.*true/);
+  assert.match(text, /要人亲自做事才用普通 notice/);
   assert.ok(!text.includes("王某"));
   assert.ok(!text.includes("管理员权限"));
   assert.ok(!text.includes('"events"'), "a rule that can't emit isn't offered it");
+});
+
+test("an informational receipt survives worker parsing and validation", () => {
+  const receipt = { notice: [{ title: "已交出", text: "结果会告诉你", fyi: true }] };
+  const message = readMessage(`已交出\n\`\`\`agent-autoloop\n${JSON.stringify(receipt)}\n\`\`\``);
+  assert.deepEqual(resultFrom(message, {}), { result: { outcome: "done", summary: "已交出", ...receipt } });
 });
 
 test("ask false removes asking instructions and examples; true keeps the default prompt", () => {

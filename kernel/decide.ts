@@ -4,7 +4,7 @@ import { credential, digest, type Environment } from "./credentials.ts";
 import { latestBefore, nextRun, parseCron } from "./cron.ts";
 import { deadlines, MINUTE, OFFLINE_AFTER, RUN_LEASE, WORKER_FRESH } from "./due.ts";
 import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
-import { iso, rows, type Change, type Fact, type Row, type Table, type View } from "./evolve.ts";
+import { iso, rows, type Change, type Fact, type Match, type Row, type Table, type View } from "./evolve.ts";
 import {
   agentsOf,
   cardView,
@@ -125,8 +125,9 @@ const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
 
 function createCard(draft: Draft, spec: Row, update = false) {
-  const cards = rows(draft.view, "cards", { key: spec.key, ...(!spec.once && { state: "open" }) }, 1, true);
-  const existing = cards.findLast((card) => card.key === spec.key && (spec.once || card.state === "open"));
+  // FYIs remain closed; their keys must not consume or reopen an actionable card.
+  const match: Match = spec.once ? {} : spec.fyi ? { fyi: 1 } : { state: "open" };
+  const existing = rows(draft.view, "cards", { key: spec.key, ...match }, 1, true)[0];
   const content = {
     title: spec.title,
     text: spec.text ?? "",

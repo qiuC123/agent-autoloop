@@ -132,11 +132,11 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 <path class="conn" d="M560 386V448"/>
 <circle class="badge" cx="560" cy="417" r="12"/>
 <text x="560" y="421.5" class="n" text-anchor="middle">4</text>
-<text x="580" y="422" class="l">拿不准才发卡片问你</text>
+<text x="580" y="422" class="l">卡片：提问 · 待办 · 只告知</text>
 
 <rect class="plug" x="390" y="452" width="548" height="92" rx="14"/>
 <text x="410" y="480" class="h2">通道插件</text>
-<text x="490" y="480" class="s">原地更新卡片 · 选项或文字回答</text>
+<text x="490" y="480" class="s">原地更新 · 只告知无按钮、不留待办</text>
 <rect class="item" x="410" y="494" width="114" height="36" rx="8"/>
 <text x="467" y="517" class="r" text-anchor="middle">桌面通知</text>
 <rect class="item" x="534" y="494" width="104" height="36" rx="8"/>

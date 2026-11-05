@@ -26,6 +26,7 @@ export function simulate(seed = 0x5eed, steps = 200000) {
     clock: 0,
     update: 0,
     staleAnswer: 0,
+    fyi: 0,
   };
   let world = new World();
   let completed = 0;
@@ -67,8 +68,11 @@ export function simulate(seed = 0x5eed, steps = 200000) {
       } else if (op === 5 && live.length) {
         const r = live[rng(live.length)];
         const fail = rng(4) === 0;
+        const fyi = rng(4) === 0;
+        if (fyi) faults.fyi++;
         const body = {
           outcome: fail ? "failed" : "done",
+          ...(fyi ? { notice: [{ title: "进度", text: `处理到 ${step}`, key: "progress", fyi: true }] } : {}),
           ...(!fail && rng(4) === 0
             ? {
                 ask: [{ title: "选择", text: "内容", options: ["甲", "乙"], key: "question" }],

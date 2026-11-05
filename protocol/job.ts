@@ -41,7 +41,7 @@ export type Job = {
     }[];
     timers: { key: string; about: string; at: string }[];
     waiting: { key: string; about: string; at: string }[];
-    open: { card: number; title: string; text: string; at: string }[];
+    open: { card: number; title: string; text: string; at: string }[]; // FYIs are closed from creation, so excluded.
     decided: { card: number; title: string; choice: string | null; at: string }[];
   };
 };

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { HOME, RULES_FILE } from "./home.ts";
 import { privateDirectory, privateFile } from "./private.ts";
+import { initializeMaintenance, maintenance, readMaintenance } from "./maintenance.ts";
 import { credential, digest, whose as keyHolder } from "../kernel/credentials.ts";
 import { decide } from "../kernel/decide.ts";
 import { AuthError, NotFound } from "../kernel/errors.ts";
@@ -31,6 +32,7 @@ export const environment = {
 
 export const db = new DatabaseSync(join(HOME, "hub.db"));
 db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
+initializeMaintenance(db);
 if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").get()) {
   throw new Error("这是旧版数据库；本轮未提供导入工具，请使用新的 AGENT_AUTOLOOP_HOME");
 }
@@ -96,12 +98,21 @@ export const onChange = (listener: Listener) => {
 export function execute(type: string, args: any[], now = Date.now()) {
   let facts: Fact[] = [];
   let value: any;
+  let controlChanged = false;
   const latest = getView();
   current = commit(db, latest, () => {
-    ({ facts, value } = decide(latest, { type, args }, now, environment));
+    if (type === "maintenance") {
+      ({ status: value, changed: controlChanged } = maintenance(latest, args[0], args[1], now));
+    } else {
+      if (type === "claimNext" && args[2] !== undefined && keyHolder(latest, "worker", args[2]) !== args[0])
+        throw new AuthError("密钥已失效");
+      const env =
+        type === "claimNext" ? { ...environment, allowNewClaims: readMaintenance().mode === "normal" } : environment;
+      ({ facts, value } = decide(latest, { type, args }, now, env));
+    }
     return facts;
   });
-  if (facts.length) for (const listener of listeners) listener(type, facts);
+  if (facts.length || controlChanged) for (const listener of listeners) listener(type, facts);
   return value;
 }
 

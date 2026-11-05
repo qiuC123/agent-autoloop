@@ -7,6 +7,7 @@
 // Quiet notices must not escape through a channel; a stale writer must receive Conflict rather than a database failure.
 // Existing logs can contain a queued run with an old agent after a rules change; replay must retain claimed configurations.
 // A rule forbidding ask must reject every question without discarding the rest of a receipt or losing its acknowledgment.
+// A closed host gate must block new claims without stranding an existing claim or changing the normal protocol.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -17,6 +18,30 @@ import { parseRules } from "../protocol/rules.ts";
 const environment = { secret: "simulation-secret", publicUrl: "https://hub.test" };
 const rules = parseRules(readFileSync(new URL("./rules.fixture.json", import.meta.url), "utf8"), 0, "UTC");
 const seeded = () => evolve(empty(), decide(empty(), { type: "rules", args: [rules] }, 1, environment).facts);
+
+test("a closed gate blocks only new claims and preserves the existing claim snapshot", () => {
+  let view = seeded();
+  const act = (type: string, args: any[], allowNewClaims?: boolean) => {
+    const d = decide(view, { type, args }, 1000, { ...environment, allowNewClaims });
+    view = evolve(view, d.facts);
+    return d.value;
+  };
+  try {
+    act("ingest", ["app", { id: "one", type: "feedback.new", subject: "one" }]);
+    assert.equal(act("claimNext", ["w1", "first"], false), null);
+    const first = act("claimNext", ["w1", "first"]);
+    assert.ok(first);
+    act("ingest", ["app", { id: "two", type: "feedback.new", subject: "two" }]);
+    assert.equal(act("claimNext", ["w1", "second"], false), null);
+    const recovered = act("claimNext", ["w1", "first"], false);
+    assert.deepEqual({ ...recovered, token: first.token }, first);
+    act("finish", [recovered.run, recovered.token, { outcome: "done" }], false);
+    assert.equal(act("claimNext", ["w1", "second"], false), null);
+    assert.ok(act("claimNext", ["w1", "second"], true));
+  } finally {
+    view.close();
+  }
+});
 
 test("ask permission rejects each question, preserves other receipt effects and replays the acknowledgment", () => {
   for (const ask of [undefined, true, false]) {

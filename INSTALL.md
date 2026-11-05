@@ -109,6 +109,12 @@ Claude 要委托 Codex 处理网页时，可用[浏览器交接模板](examples/
 
 桌面通知只在这台电脑上显示。需要别的通道时，先确认接收位置，再按配置手册接入。不要直接测试发信或发群消息。`access` 的含义见[插件说明](docs/plugins.md#access-实际能做什么)，不要替用户扩大权限。
 
+## 部署时保持维护
+
+支持维护 API 的引擎可先用本人密钥向 `POST /v1/maintenance` 发送 `drain`（带将来的 `deadline`），保存返回的 `id`；`GET` 看到 `claimed=0`、`unknown=0` 后，以该 ID 发送 `hold`，成功后再停服务、更新和启动。新进程仍保持 held；核对 `problem=null`、状态与生效规则的 `rules_version` / `rules_hash` 后，以同一 ID 显式 `resume`。到期不会自动恢复，要核对后 `renew` 再 resume。首次升级前的旧引擎尚不支持此流程；完整请求见[维护协议](docs/protocol.md#持久维护闸门)。
+
+`<home>/maintenance.json` 是宿主控制文件，不手动删除或改成 normal；缺损会关闭新领取，状态会说明问题。数据库中的宿主初始化标记让重启和投影重建也能识别文件丢失。备份、恢复时一起保留 `maintenance.json`、`hub.db` 和 `master.key`。
+
 ## 卸载
 
 卸载程序，默认保留规则、密钥和记录：
@@ -128,6 +134,6 @@ agent-autoloop uninstall
 - [插件](docs/plugins.md)：三个可运行的最小例子。
 - [安全边界](SECURITY.md)：密钥、执行权限和交付审查。
 
-开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
+开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db`、`maintenance.json` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
 
 Windows Codex 插件按当前权限模式和登录环境运行 `codex sandbox`，取得实际用户 SID 后，只授权本轮的 `agent/` 资料目录：`read` 只读，默认 `edit` 可读写。父目录里的 worker 轮次凭据、退出标记及启动参数不共享；`hub.db`、`master.key`、`secrets.env`、`config.json` 仍只由当前用户读取。不会修改沙箱配置或自动改用 `full`。

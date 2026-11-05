@@ -149,7 +149,7 @@ async function work(call: Call) {
   for (;;) {
     if (!whose(services.view(), "worker", token)) throw new AuthError("密钥已失效");
     const wantsWork = !request.signal.aborted && url.searchParams.get("capacity") !== "0";
-    const job = wantsWork ? act(call, "claimNext", worker, claim) : null;
+    const job = wantsWork ? act(call, "claimNext", worker, claim, token) : null;
     const cancel = cancels(services.view(), worker);
     if (job || cancel.length || services.now() >= until || request.signal.aborted) return json({ job, cancel });
     await services.wait(until, request.signal);
@@ -211,6 +211,11 @@ async function route(call: Call): Promise<Response> {
   const { method } = request;
   const path = call.url.pathname;
   if (method === "GET" && path === "/healthz") return json({ ok: true, commit: services.commit });
+  if (path === "/v1/maintenance" && ["GET", "POST"].includes(method)) {
+    requireKey(call, "owner");
+    const input = method === "POST" ? await readJson(request) : undefined;
+    return json(act(call, "maintenance", token, input));
+  }
   const key = /^\/v1\/keys\/(source|worker|channel|owner)\/([a-z][a-z0-9-]*)$/.exec(path);
   if (method === "DELETE" && key) return ownerAct(call, "removeKey", key[1], key[2]);
   const link = CARD_LINK.exec(path);

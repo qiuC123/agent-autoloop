@@ -1,4 +1,5 @@
-// Failure mode: POSIX modes silently leave Windows keys readable by other local users.
+// Failure modes: POSIX modes leave Windows keys readable; a transient native timeout fails without retry,
+// or exhausted ACL retries still publish secrets or cache an unprotected directory.
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { join } from "node:path";
@@ -9,9 +10,35 @@ import { test } from "node:test";
 import { setup } from "./helpers.ts";
 import { assertPrivate } from "./private.ts";
 import { privateDirectory, privateFile, writePrivateFile } from "../host/private.ts";
+import { runAclCommand } from "../host/windows-acl.ts";
 const home = setup("private");
 const runtime = await import("../host/runtime.ts");
 const { writeConfig } = await import("../host/config.ts");
+test("native ACL commands retry only timeouts, never permission failures", (t) => {
+  let calls = 0;
+  let code = "ETIMEDOUT";
+  const mocked = t.mock.method(cp, "execFileSync", ((_program: string, _args: string[], options: any) => {
+    assert.equal(options.timeout, 30_000);
+    calls++;
+    if (code === "EACCES" || calls === 1) throw Object.assign(new Error(code), { code });
+    return "fixture";
+  }) as typeof cp.execFileSync);
+  syncBuiltinESMExports();
+  try {
+    for (const program of ["whoami.exe", "icacls.exe", "csc.exe", "acl.exe"]) {
+      calls = 0;
+      assert.equal(runAclCommand(program, []), "fixture");
+      assert.equal(calls, 2);
+    }
+    code = "EACCES";
+    calls = 0;
+    assert.throws(() => runAclCommand("acl.exe", []), /EACCES/);
+    assert.equal(calls, 1);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
 test(
   "private ACLs work without PowerShell and native waits are bounded",
   { skip: process.platform !== "win32" },
@@ -123,12 +150,15 @@ test(
     fs.writeFileSync(target, "old contents");
     grantForeignRead(target);
     const original = cp.execFileSync;
+    let calls = 0;
     const mocked = t.mock.method(cp, "execFileSync", (() => {
+      calls++;
       throw Object.assign(new Error("native ACL timeout"), { code: "ETIMEDOUT" });
     }) as typeof original);
     syncBuiltinESMExports();
     try {
       assert.throws(() => writePrivateFile(target, "fresh secret"), /timeout/);
+      assert.equal(calls, 2, "one retry, then fail closed");
       assert.equal(fs.readFileSync(target, "utf8"), "old contents");
     } finally {
       mocked.mock.restore();
@@ -139,3 +169,26 @@ test(
     assertPrivate(target);
   },
 );
+
+test("a transient ACL timeout retries once with a 30 second deadline", { skip: process.platform !== "win32" }, (t) => {
+  const target = join(home, "acl-retry", "secret");
+  const original = cp.execFileSync;
+  let attempts = 0;
+  const mocked = t.mock.method(cp, "execFileSync", ((program: string, args: string[], options: any) => {
+    if (program.endsWith("acl.exe") && args[0] === join(home, "acl-retry")) {
+      attempts++;
+      assert.equal(options.timeout, 30_000);
+      if (attempts === 1) throw Object.assign(new Error("synthetic ACL timeout"), { code: "ETIMEDOUT" });
+    }
+    return original(program, args, options);
+  }) as typeof original);
+  syncBuiltinESMExports();
+  try {
+    writePrivateFile(target, "test-only");
+    assert.equal(attempts, 2);
+    assertPrivate(target);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});

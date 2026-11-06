@@ -15,7 +15,7 @@ const specs = [
     ["card"],
   ],
   ["resolve", "将卡片结案，写明已核实的结果", { card: positive, reason: string }, ["card", "reason"]],
-  ["stop", "停止一轮", { run: positive }, ["run"]],
+  ["stop", "停止一轮；结果不确定时，本人核实后按未完成结束", { run: positive }, ["run"]],
   [
     "emit",
     "用本机来源发送事件；相同编号只记一次",

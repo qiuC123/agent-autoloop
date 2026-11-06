@@ -9,7 +9,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 ## 看情况、回答
 
-`agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（同一轮重试的已报用量相加，没上报的轮数会写出来）。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮，等整个进程组退出才报告已停。
+`agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（同一轮重试的已报用量相加，没上报的轮数会写出来）。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮；claimed 等整个进程组退出才报告已停，unknown 要本人核实旧执行已停止和业务状态后按未完成结束。
 
 这里没有网页。用户想要一个页面看全局，就替他写一个：读 `GET /v1/state`，密钥是 `config.json` 的 `owner`，请求见 `docs/protocol.md` 的「本人」一节。
 
@@ -31,13 +31,13 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 现成场景和内置插件从 [README](../../README.md#拿来即用的场景模板)进入，开发示例见[写插件](../../docs/plugins.md)。用户想接自动化时先从例子改，不要从零写：`examples/recipes/` 里有早报（`morning-brief`）、处理 GitHub issue（`github-issues`）、线上报错（`ops-alerts`）、反馈处理（`feedback`）、网站巡检（`website-watch`）、飞书周报与业务摘要（`feishu-brief`）和 Claude 浏览器交接（`browser-handoff`），每个都有规则、Skill 和写明权限原因的 README。反馈、巡检、飞书摘要和浏览器交接默认飞书本人私聊；按模板说明替换虚构标识，业务资料留在私有目录，读取用本人身份，通知用机器人身份。要写新的 Agent、通道或事件插件，看教程 `docs/plugins.md` 和最小例子 `examples/plugins/`。
 
-Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台计划任务在当前用户登录时和每 5 分钟触发，`IgnoreNew` 保留正在运行的 runner；保留安装终端 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保存停止标记，重复触发、重新登录和重启都不恢复，直到再次 `service install`；`service remove` 再删任务。独立 Agent 保留供重启认领；`stop <轮次>` 才会结束该轮整个 Job 进程树。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
+Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台计划任务在当前用户登录时和每 5 分钟触发，`IgnoreNew` 保留正在运行的 runner；保留安装终端 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保存停止标记，重复触发、重新登录和重启都不恢复，直到再次 `service install`；`service remove` 再删任务。独立 Agent 保留供重启认领；`stop <轮次>` 对 claimed 会结束该轮整个 Job 进程树，对 unknown 只记录本人的结束确认。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
 
-Windows 的接单程序由 `up` 托管为子进程，初始化限时 30 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应只强杀 `up`，由 libuv Job 回收非 detached 子孙，独立 Agent 托管器保留供新 worker 按 Job 名认领。`service stop` 同样保留独立 Agent。runner 本身退出由下一次重复触发恢复。ACL 用限时原生辅助程序，不同步启动 PowerShell。升级后运行一次 `service install` 替换旧 runner 和任务 XML。前台 `up` 需自行重启，不清除停止标记。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
+Windows 的接单程序由 `up` 托管为子进程，初始化限时 300 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应只强杀 `up`，由 libuv Job 回收非 detached 子孙，独立 Agent 托管器保留供新 worker 按 Job 名认领。`service stop` 同样保留独立 Agent。runner 本身退出由下一次重复触发恢复。ACL 原生辅助程序每次限 30 秒，仅超时重试一次，不同步启动 PowerShell；准备失败交 failed，权限失败不写秘密。升级后运行一次 `service install` 替换旧 runner 和任务 XML。前台 `up` 需自行重启，不清除停止标记。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
 
 ## 暂停领活、排空与恢复
 
-本人密钥调用 `GET/POST /v1/maintenance`。先 `{"action":"drain","deadline":"<将来的 ISO 时间>"}`，保存返回的 `id`；排空由外部客户端核对，Agent 本轮直接结束，不阻塞等。已有任务仍能重取、心跳、交结果和取消，事件、回答、定时及卡片照常处理。只有 claimed 和 unknown 都为零，`{"action":"hold","id":"<本次 id>"}` 才成功，queued、等回答和 later 不必清空。
+本人密钥调用 `GET/POST /v1/maintenance`。先 `{"action":"drain","deadline":"<将来的 ISO 时间>"}`，保存返回的 `id`；排空由外部客户端核对，Agent 本轮直接结束，不阻塞等。已有任务仍能重取、心跳、交结果和取消，事件、回答、定时及卡片照常处理。只有 claimed 和 unknown 都为零，`{"action":"hold","id":"<本次 id>"}` 才成功，queued、等回答和 later 不必清空。有 unknown 且结果不会回来时，本人核实旧执行已停止和业务状态，用 `stop <轮次>`（HTTP cancel / MCP stop 相同）或该轮通知的“已处理”按未完成结束；卡片随之关闭，迟到结果被拒收。
 
 hold 后停服、更新、启动，维护状态仍保留。外部核对 `problem=null`、模式、计数及生效的 `rules_version` / `rules_hash` 后，才显式 `{"action":"resume","id":"<本次 id>"}`。旧 ID 不能解开下一次维护。过期仍关闭，核对后先用 `renew` 带同一 ID 和将来的 deadline 续期；坏文件也关闭，修复访问并重新 drain 建立新 ID，不删除维护文件来恢复。备份包括 `maintenance.json`。请求、幂等和兼容细节见[协议](../../docs/protocol.md#持久维护闸门)。
 

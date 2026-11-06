@@ -1,7 +1,7 @@
 // The worker: on a machine that nothing can reach, it keeps coming to the hub for work and starts an agent for each
 // job. An agent runs detached, in its own process group, writing to files, so the worker can stop and come back and
-// find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
-// in and stays until the hub has taken it.
+// find it still going, or finished. A job is saved before launching. A result stays until the hub has taken it,
+// normally in a private file, or in memory if storage fails.
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -176,15 +176,30 @@ export function createWorker({
   let told = false;
   let tries = 0;
   privateDirectory(RUNS);
+  const unsaved = new Map<string, Entry>();
 
-  const entries = () =>
-    readdirSync(RUNS).flatMap((id) => {
+  const entries = () => {
+    const saved = readdirSync(RUNS).flatMap((id) => {
       try {
         return [JSON.parse(readFileSync(path.join(RUNS, id, "entry.json"), "utf8")) as Entry];
       } catch {
         return [];
       }
     });
+    return [...new Map([...saved, ...unsaved.values()].map((entry) => [entry.dir, entry])).values()];
+  };
+
+  // Never fall back to an unprotected write; keep the token/result in memory until it can be saved or acknowledged.
+  function remember(entry: Entry) {
+    unsaved.set(entry.dir, entry);
+    try {
+      save(entry);
+      unsaved.delete(entry.dir);
+    } catch (error) {
+      log(`run ${entry.run}: 无法保存私有记录，保留在内存中等待交回：${error}`);
+    }
+    progress?.();
+  }
 
   /** Starts a turn of the agent: a process that outlives this one, leaving its output and exit code in files. */
   function launch(entry: Entry, adapter: Adapter, prompt: string) {
@@ -242,18 +257,17 @@ export function createWorker({
     child.on("error", (error) => log(`run ${entry.run}: ${error}`));
     child.unref();
     entry.pid = child.pid;
-    save(entry);
+    remember(entry);
     log(`run ${entry.run} (${rule.name}) turn ${entry.turn} started, pid ${child.pid}`);
   }
 
   function endWith(entry: Entry, result: Result) {
     entry.result = result;
-    save(entry);
+    remember(entry);
   }
 
   async function start(job: Job) {
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
-    privateDirectory(dir);
     const entry: Entry = {
       run: job.run,
       token: job.token,
@@ -268,17 +282,23 @@ export function createWorker({
       repairs: 0,
       triedFresh: false,
     };
-    // Kept before anything slow: a worker stopped from here on still has the job.
-    save(entry);
     try {
+      // Nothing can launch before the job has been saved privately.
+      save(entry);
+      progress?.();
       const contextFile = path.join(entry.folder ?? dir, "context.json");
       writePrivateFile(contextFile, JSON.stringify(job.context, null, 2));
+      progress?.();
       const adapter = await adapterFor(job.agent.use);
       entry.prompt = promptFor(job, contextFile);
       save(entry);
       launch(entry, adapter, entry.prompt);
     } catch (error) {
-      endWith(entry, { outcome: "failed", error: String((error as Error).message ?? error).slice(0, 500) });
+      progress?.();
+      endWith(entry, {
+        outcome: "failed",
+        error: `准备或启动本轮失败：${String((error as Error).message ?? error)}`.slice(0, 500),
+      });
     }
   }
 
@@ -392,7 +412,7 @@ export function createWorker({
       try {
         await hub.started(entry.run, entry.token, { session, ...(adapter.link && { link: adapter.link(session) }) });
         entry.told = session;
-        save(entry);
+        remember(entry);
       } catch (error) {
         log(`run ${entry.run}: couldn't say it started: ${error}`);
       }
@@ -404,7 +424,7 @@ export function createWorker({
       // Its turn is over but it hasn't gone: whatever it's stuck on, the answer is already there.
       if (!entry.finishedAt) {
         entry.finishedAt = moment;
-        save(entry);
+        remember(entry);
       } else if (moment - entry.finishedAt > GRACE) {
         stop(entry, "finished");
       }
@@ -415,7 +435,7 @@ export function createWorker({
     if (entry.stopping !== undefined || entry.result) return;
     entry.stopping = now();
     entry.why = why;
-    save(entry);
+    remember(entry);
     signal(entry, "SIGTERM");
     log(`run ${entry.run}: stopping (${why})`);
   }
@@ -433,7 +453,14 @@ export function createWorker({
       }
       log(`run ${entry.run}: the hub refused its result (${error.status}: ${error.message}); dropped`);
     }
-    unlinkSync(path.join(entry.dir, "entry.json"));
+    const file = path.join(entry.dir, "entry.json");
+    try {
+      if (existsSync(file)) unlinkSync(file);
+      unsaved.delete(entry.dir);
+    } catch (error) {
+      unsaved.set(entry.dir, entry);
+      log(`run ${entry.run}: 无法清理已交回的私有记录：${error}`);
+    }
   }
 
   /** Nothing else can tell the owner when the hub is what's gone. */
@@ -465,7 +492,13 @@ export function createWorker({
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
     for (const entry of entries()) {
-      await check(entry);
+      try {
+        if (unsaved.has(entry.dir)) remember(entry);
+        await check(entry);
+      } catch (error) {
+        // A process we cannot inspect may still be running; keep its heartbeat instead of declaring it finished.
+        log(`run ${entry.run}: 无法核实进程状态，稍后重试：${error}`);
+      }
       progress?.();
     }
     for (const entry of entries()) {

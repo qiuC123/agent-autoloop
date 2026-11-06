@@ -244,7 +244,7 @@ function sweep(draft: Draft) {
       for (const run of rows(draft.view, "runs", { state: "claimed" }).filter(inDoubt)) {
         put(draft, "runs", run.id, { state: "unknown" });
         const agent = configuration(draft.view, run.rules_version).agents[run.agent].name;
-        const words = `交给 ${agent} 后超过 5 分钟没有回音，不确定做没做完；后续新任务照常处理。`;
+        const words = `交给 ${agent} 后超过 5 分钟没有回音，不确定做没做完；后续新任务照常处理。请本人核实，点“已处理”会将这一轮按未完成结束，之后的迟到结果不再生效。`;
         notify(draft, `run:${run.id}:unknown`, run.rule, words, threadOf(run));
       }
     }
@@ -404,6 +404,13 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
   return { rejected };
 }
 
+function settleUnknown(draft: Draft, run: Row, by = "本人") {
+  const summary = "本人确认按未完成结束";
+  put(draft, "runs", run.id, { state: "cancelled", finished_at: draft.at, summary, cancel_at: null });
+  for (const card of rows(draft.view, "cards", { key: `run:${run.id}:unknown`, state: "open" }))
+    closeCard(draft, card, summary, by);
+}
+
 function answer(draft: Draft, id: number, given: Row) {
   const card = draft.view.get("cards", id);
   if (!card) throw new NotFound("没有这张卡片");
@@ -418,7 +425,10 @@ function answer(draft: Draft, id: number, given: Row) {
   if (given.version !== undefined && given.version < card.content_version) throw new Conflict("卡片已更新，请重看");
   if (card.state !== "open") return { changed: false, state: card.state };
   if (card.kind === "notice") {
-    closeCard(draft, card, "已处理", given.by ?? null);
+    const runId = /^run:([1-9][0-9]*):unknown$/.exec(card.key)?.[1];
+    const run = runId ? draft.view.get("runs", runId) : undefined;
+    if (run?.state === "unknown") settleUnknown(draft, run, given.by ?? "本人");
+    else closeCard(draft, card, "已处理", given.by ?? null);
     return { changed: true, state: "closed" };
   }
   if (given.text !== undefined && typeof given.text !== "string") throw new InputError("回答要是文字");
@@ -545,6 +555,7 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
     if (!run) throw new NotFound("没有这一轮");
     if (run.state === "queued") put(draft, "runs", id, { state: "cancelled", finished_at: draft.at });
     else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
+    else if (run.state === "unknown") settleUnknown(draft, run);
     else throw new InputError("这一轮已经结束了");
   },
   resolve(draft, id, reason, by) {

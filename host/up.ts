@@ -110,7 +110,8 @@ export async function up() {
               }
             }, ms);
           };
-          arm(30_000);
+          // Cold ACL setup has four native steps, each allowing two 30-second attempts.
+          arm(300_000);
           worker.on("message", (message) => {
             if (message === "booted") {
               worker.send({ url: config.url, ...config.worker }, (error) => {

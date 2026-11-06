@@ -10,6 +10,7 @@
 // send retries at once, or for ever; a channel that never came counts as having failed; a card solved before it was sent
 // bothers the owner; two channels don't each get their own copy; an answer in one channel doesn't update the other.
 // Receipt FYIs must reach channels without buttons, open attention or wakeups, and update without reopening old tasks.
+// Only an authenticated owner answer may settle an unknown run; an old card cannot undo a late successful result.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
@@ -31,6 +32,45 @@ const clean = () => {
 };
 const note = (n: number, step = "new") => ({ id: `feedback:${n}:${step}`, type: `feedback.${step}`, subject: `#${n}` });
 const claim = (worker: string, now: number) => claimNext(worker, `c${Math.random()}`, now);
+
+test("an unknown notice settles its run only after the channel verifies the owner and original message", async () => {
+  clean();
+  const { heartbeat, sweep, cancel } = await import("../host/runtime.ts");
+  ingest("app", note(1), at(0));
+  const job = claim("w1", at(0))!;
+  heartbeat("w1", [], at(6));
+  sweep(at(6));
+  const sent = nextCard("chat", at(6))!;
+  delivered("chat", sent.id, sent.version, "unknown-message", at(6));
+  for (const given of [
+    { by: "stranger", ref: "unknown-message" },
+    { by: "me", ref: "wrong-message" },
+  ]) {
+    assert.throws(() => answer(sent.id, { channel: "chat", ...given }, at(7)), AuthError);
+    assert.equal(stateOf(at(7)).totals.unknown, 1);
+    assert.equal(card(sent.id).state, "open");
+  }
+  answer(sent.id, { channel: "chat", by: "me", ref: "unknown-message" }, at(7));
+  assert.equal(stateOf(at(7)).totals.unknown, 0);
+  assert.equal(card(sent.id).by, "me");
+  assert.equal(card(sent.id).result, "本人确认按未完成结束");
+  assert.equal(card(sent.id).answer_event, null, "settlement must not wake or redo the business");
+  assert.throws(() => finish(job.run, job.token, { outcome: "done" }, at(8)), AuthError);
+  assert.throws(() => cancel(job.run, at(8)), InputError, "terminal cancellation behavior stays unchanged");
+});
+
+test("answering an unknown notice after the late result arrived cannot cancel completed work", async () => {
+  clean();
+  const { heartbeat, sweep } = await import("../host/runtime.ts");
+  ingest("app", note(1), at(0));
+  const job = claim("w1", at(0))!;
+  heartbeat("w1", [], at(6));
+  sweep(at(6));
+  const sent = nextCard("chat", at(6))!;
+  finish(job.run, job.token, { outcome: "done", summary: "已核实完成" }, at(7));
+  assert.deepEqual(answer(sent.id, { by: "本人" }, at(8)), { changed: false, state: "closed" });
+  assert.equal(one<any>("SELECT state FROM runs WHERE id = ?", [job.run])!.state, "done");
+});
 const question = {
   title: "要不要删旧表",
   text: "占了 10 GB。",

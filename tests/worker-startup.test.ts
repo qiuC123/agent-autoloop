@@ -1,5 +1,6 @@
 // Failure modes: startup or work stalls silently; native blocking prevents exit; healthy progress is killed;
-// a clean worker exit or an uncaught exception leaves the hub running without a worker.
+// a clean worker exit or an uncaught exception leaves the hub running without a worker;
+// the startup watchdog kills ACL initialization before its bounded retries have time to finish.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,7 +21,7 @@ test(
   },
 );
 
-for (const fault of ["loading", "preparation", "native", "poll", "healthy", "retry", "exit", "error"]) {
+for (const fault of ["loading", "preparation", "native", "acl-retry", "poll", "healthy", "retry", "exit", "error"]) {
   test(`embedded worker supervision: ${fault}`, { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
     const directory = mkdtempSync(join(tmpdir(), "autoloop-worker-fault-"));
     const preload = join(directory, "fault.mjs");
@@ -33,7 +34,9 @@ for (const fault of ["loading", "preparation", "native", "poll", "healthy", "ret
       const fault = ${JSON.stringify(fault)};
       if (!process.argv[1]?.replaceAll('\\\\', '/').endsWith('/worker/process.ts')) {
         const original = globalThis.setTimeout;
-        globalThis.setTimeout = (fn, ms, ...args) => original(fn, ms === 30000 || ms === 120000 ? 5000 : ms, ...args);
+        globalThis.setTimeout = (fn, ms, ...args) => original(fn,
+          fault === 'acl-retry' && [30000, 120000, 300000].includes(ms) ? ms / 10 :
+          ms === 30000 || ms === 120000 || ms === 300000 ? 5000 : ms, ...args);
       } else {
         if (fault === 'loading') registerHooks({ load(url, context, next) {
           if (url.endsWith('/worker/process.ts')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -46,6 +49,18 @@ for (const fault of ["loading", "preparation", "native", "poll", "healthy", "ret
         if (fault === 'native') {
           const original = cp.execFileSync;
           cp.execFileSync = () => original(process.execPath, ['-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(nativePid)}, String(process.pid)); setTimeout(() => {}, 20000);`)}], {windowsHide: true, timeout:30_000});
+          syncBuiltinESMExports();
+        }
+        if (fault === 'acl-retry') {
+          const original = cp.execFileSync;
+          let calls = 0;
+          cp.execFileSync = (...args) => {
+            if (String(args[0]).endsWith('acl.exe') && calls++ === 0) {
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500);
+              throw Object.assign(new Error('synthetic ACL timeout'), {code: 'ETIMEDOUT'});
+            }
+            return original(...args);
+          };
           syncBuiltinESMExports();
         }
         if (fault === 'poll' || fault === 'healthy') {
@@ -76,11 +91,12 @@ for (const fault of ["loading", "preparation", "native", "poll", "healthy", "ret
         0,
         pathToFileURL(preload).href,
         true,
-        fault === "healthy" || fault === "retry" ? 13_000 : 30_000,
+        fault === "healthy" || fault === "retry" ? 13_000 : fault === "acl-retry" ? 8000 : 30_000,
       );
       if (fault !== "exit" && fault !== "error") assert.equal(result.responsive, true, JSON.stringify(result));
-      if (fault === "poll" || fault === "healthy") assert.equal(result.online, true, JSON.stringify(result));
-      if (fault === "healthy" || fault === "retry") {
+      if (fault === "poll" || fault === "healthy" || fault === "acl-retry")
+        assert.equal(result.online, true, JSON.stringify(result));
+      if (fault === "healthy" || fault === "retry" || fault === "acl-retry") {
         assert.equal(result.exitCode, null, JSON.stringify(result));
         if (fault === "retry") assert.match(result.output, /synthetic unreachable hub/);
         return;

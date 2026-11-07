@@ -1,5 +1,6 @@
 // Failure modes: a clean/crashed engine stays down, a blocked hub survives forever, stop is undone by restart,
-// or a watchdog kills detached Agents instead of leaving them for recovery. All homes and engines are fixtures.
+// or a watchdog kills detached Agents instead of leaving them for recovery, including under the hidden WScript parent.
+// All homes and engines are fixtures.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -10,6 +11,8 @@ import { pathToFileURL } from "node:url";
 import { controlUp } from "../host/windows-control.ts";
 
 const runner = path.resolve(import.meta.dirname, "../host/windows-service.ts");
+const launcher = path.resolve(import.meta.dirname, "../host/windows-service-launcher.js");
+const wscript = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "wscript.exe");
 const control = pathToFileURL(path.resolve(import.meta.dirname, "../host/windows-control.ts")).href;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const alive = (pid: number) => {
@@ -61,8 +64,15 @@ async function fixture(
     JSON.stringify({ home, node: process.execPath, program, searchPath: process.env.PATH, agentHomes: {} }),
   );
   const child = spawn(
-    consoleLauncher ?? process.execPath,
-    [...(consoleLauncher ? [process.execPath] : []), "--import", pathToFileURL(preload).href, runner, configuration],
+    consoleLauncher ?? wscript,
+    [
+      ...(consoleLauncher ? [] : ["//B", "//E:JScript", launcher]),
+      process.execPath,
+      "--import",
+      pathToFileURL(preload).href,
+      runner,
+      configuration,
+    ],
     {
       env: { ...process.env, AGENT_AUTOLOOP_HOME: home },
       windowsHide: true,
@@ -78,7 +88,10 @@ async function fixture(
   try {
     await run(home, child, log);
   } finally {
+    const runnerPid = controlUp(home, "status", "service");
     controlUp(home, "stop", "service");
+    await pause(200);
+    if (runnerPid && alive(runnerPid)) process.kill(runnerPid, "SIGKILL");
     if (consoleLauncher && Number(launchedPid.trim()) > 0) {
       try {
         process.kill(Number(launchedPid.trim()), "SIGKILL");
@@ -107,7 +120,9 @@ for (const code of [0, 7, -1073741510]) {
           await until(() => log().includes("start 2"), log);
           assert.equal(child.exitCode, null, log());
           await until(() => controlUp(home, "status") !== null, log);
-          assert.equal(controlUp(home, "stop", "service"), child.pid, log());
+          const runnerPid = controlUp(home, "status", "service");
+          assert.ok(runnerPid && runnerPid !== child.pid, "WScript must wait for a separate runner process");
+          assert.equal(controlUp(home, "stop", "service"), runnerPid, log());
           await until(() => child.exitCode !== null, log);
           assert.equal(child.exitCode, 0, log());
           await pause(1000);
@@ -215,7 +230,7 @@ test(
       await fixture(code, async (home, child, log) => {
         await until(() => log().includes("start 1"), log);
         if (code.includes("kill runner")) {
-          child.kill("SIGKILL");
+          process.kill(controlUp(home, "status", "service")!, "SIGKILL");
           await until(() => child.exitCode !== null || child.signalCode !== null, log);
         }
         execFileSync(
@@ -232,12 +247,16 @@ test(
         const starts = readFileSync(path.join(home, "starts"), "utf8");
         await pause(1000);
         assert.equal(readFileSync(path.join(home, "starts"), "utf8"), starts);
-        execFileSync(process.execPath, [runner, path.join(home, "service.json")], {
-          env: { ...process.env, AGENT_AUTOLOOP_HOME: home },
-          windowsHide: true,
-          timeout: 5_000,
-          stdio: "pipe",
-        });
+        execFileSync(
+          wscript,
+          ["//B", "//E:JScript", launcher, process.execPath, runner, path.join(home, "service.json")],
+          {
+            env: { ...process.env, AGENT_AUTOLOOP_HOME: home },
+            windowsHide: true,
+            timeout: 5_000,
+            stdio: "pipe",
+          },
+        );
         assert.equal(readFileSync(path.join(home, "starts"), "utf8"), starts, "a scheduler trigger must not undo stop");
       });
     }

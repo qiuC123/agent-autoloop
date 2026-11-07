@@ -1,4 +1,4 @@
-// Prevents losing custom rules or PATH, registering a machine-wide task, executing paths as code, or removing another task.
+// Prevents visible service consoles, rejecting legacy tasks, losing rules/PATH, or replacing another user's action.
 import assert from "node:assert/strict";
 import {
   closeSync,
@@ -72,6 +72,7 @@ test("Windows task uses the current user's interactive login, one instance and n
     node: "C:\\Program Files\\nodejs\\node.exe",
     program: "C:\\a & b\\agent-autoloop.ts",
     runner: "C:\\a & b\\windows-service.ts",
+    systemRoot: "D:\\Test Windows",
     searchPath: "C:\\my tools;C:\\Windows\\System32",
     user: "S-1-5-21-123",
     run: (program, args) => {
@@ -112,7 +113,11 @@ test("Windows task uses the current user's interactive login, one instance and n
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<AllowHardTerminate>false<\/AllowHardTerminate>/);
   assert.match(xml, /<RestartOnFailure><Interval>PT1M<\/Interval><Count>999<\/Count>/);
-  assert.match(xml, /<Command>C:\\Program Files\\nodejs\\node.exe<\/Command>/);
+  assert.match(xml, /<Command>D:\\Test Windows\\System32\\wscript.exe<\/Command>/);
+  assert.match(
+    xml,
+    /<Arguments>\/\/B \/\/E:JScript &quot;[^<]*windows-service-launcher.js&quot; &quot;C:\\Program Files\\nodejs\\node.exe&quot; &quot;--disable-warning=ExperimentalWarning&quot;/,
+  );
   assert.match(xml, /&amp;/);
   const config = JSON.parse(readFileSync(service.configFile, "utf8"));
   assert.equal(config.searchPath, "C:\\my tools;C:\\Windows\\System32");
@@ -125,14 +130,27 @@ test("reinstall upgrades an owned old task and resumes a persistent stop only af
   const marker = path.join(home, "service.stopped");
   let createFails = true;
   let installed = "";
+  const legacyArguments =
+    "&quot;--disable-warning=ExperimentalWarning&quot; &quot;C:\\engine\\windows-service.ts&quot; &quot;" +
+    path.join(home, "service.json") +
+    "&quot;";
   const service = windowsService({
     home,
+    node: "C:\\fixture\\node.exe",
+    runner: "C:\\engine\\windows-service.ts",
+    systemRoot: "D:\\Test Windows",
     user: "S-1-5-21-123",
     run: (program, args) => {
       if (program === "powershell.exe")
         return {
           status: 0,
-          stdout: Buffer.from(service.xml().replace(/<TimeTrigger>[\s\S]*?<\/TimeTrigger>/, "")).toString("base64"),
+          stdout: Buffer.from(
+            service
+              .xml()
+              .replace(/<TimeTrigger>[\s\S]*?<\/TimeTrigger>/, "")
+              .replace(/<Command>[^<]*<\/Command>/, "<Command>C:\\fixture\\node.exe</Command>")
+              .replace(/<Arguments>[^<]*<\/Arguments>/, `<Arguments>${legacyArguments}</Arguments>`),
+          ).toString("base64"),
         };
       if (args[0] === "/Create") {
         assert.ok(existsSync(marker), "failed registration must leave the service stopped");
@@ -146,11 +164,14 @@ test("reinstall upgrades an owned old task and resumes a persistent stop only af
   });
   mkdirSync(home);
   writeFileSync(marker, "stopped");
+  writeFileSync(service.taskFile, "legacy task");
+  assert.equal(service.installed(), true, "status must recognize the old direct Node action");
   assert.throws(() => service.install(), /fixture registration failure/);
   assert.ok(existsSync(marker));
   createFails = false;
   service.install();
   assert.match(installed, /<TimeTrigger>/);
+  assert.match(installed, /<Command>D:\\Test Windows\\System32\\wscript.exe<\/Command>/);
   assert.equal(existsSync(marker), false);
 });
 
@@ -171,6 +192,7 @@ test("Windows remove only deletes the matching task and leaves another task unto
   service.remove();
   assert.ok(calls.every((args) => args[0] === "-NoLogo"));
   registered = service.xml();
+  assert.equal(service.installed(), true, "status must recognize the hidden action");
   service.remove();
   assert.deepEqual(calls.at(-1), ["/Delete", "/TN", service.name, "/F"]);
   assert.ok(!calls.some((args) => args[0] === "/End"), "normal service stop must preserve detached agents");
@@ -203,6 +225,9 @@ test("Windows task ownership checks the actual executable, full arguments, direc
   for (const [name, replace] of [
     ["command", (xml: string) => xml.replace(/<Command>[^<]*<\/Command>/, "<Command>C:\\other.exe</Command>")],
     ["arguments", (xml: string) => xml.replace("--disable-warning=ExperimentalWarning", "--eval runOtherCode")],
+    ["launcher", (xml: string) => xml.replace("windows-service-launcher.js", "other.js")],
+    ["host flags", (xml: string) => xml.replace("//B //E:JScript", "//E:VBScript")],
+    ["node", (xml: string) => xml.replace(/node(?:\.exe)?&quot;/, "other.exe&quot;")],
     [
       "directory",
       (xml: string) =>
@@ -234,6 +259,7 @@ test("Windows task ownership checks the actual executable, full arguments, direc
     mkdirSync(path.dirname(service.taskFile), { recursive: true });
     writeFileSync(service.taskFile, "local file does not establish task ownership");
     registered = replace(service.xml());
+    assert.equal(service.installed(), false, name);
     assert.throws(() => service.install(), /同名/, name);
     service.remove();
     assert.ok(!calls.some((args) => ["/Delete", "/Create", "/Run"].includes(args[0])), name);

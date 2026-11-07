@@ -4,7 +4,7 @@
 
 ## 安装
 
-支持 macOS、Linux、Windows 10/11。需要 Node.js 24 或更新、Git，以及一个已经登录的命令行 Agent。macOS / Linux 另需 curl，Windows 需要系统自带的 Windows PowerShell 5.1 和 .NET Framework 4.x 编译器。
+支持 macOS、Linux、Windows 10/11。需要 Node.js 24 或更新、Git，以及一个已经登录的命令行 Agent。macOS / Linux 另需 curl，Windows 需要系统自带的 Windows PowerShell 5.1、Windows Script Host（JScript）和 .NET Framework 4.x 编译器。
 
 先检查 `node --version`。Homebrew 的 `node@24` 默认不进 PATH，装好后还要运行 `export PATH="$(brew --prefix node@24)/bin:$PATH"`；需要长期生效时再写入用户的 shell 配置。不要替用户登录，也不要读取或复制登录凭据。
 
@@ -21,6 +21,8 @@ irm https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.ps1 
 ```
 
 Windows 常驻用当前用户的计划任务：登录触发，加每 5 分钟无限重复的时间触发；使用交互登录令牌，不保存密码、不提权，未登录时不运行。任务名按数据目录区分，`IgnoreNew` 保证只跑一个 runner；runner 意外退出后由下一次重复触发恢复。runner 负责恢复 `up`：所有退出码按 1–60 秒退避重启，连续健康 5 分钟重置退避；每 15 秒探测本机身份通道，连续 5 分钟无回应只强杀 `up`，保留独立 Agent，不依赖计划任务的失败重试。日志在数据目录的 `logs/up.log`。服务保留安装终端的 PATH 和 `HOME`、`USERPROFILE`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME` 中已有的目录设置；没有复制 Agent 凭据。修改这些目录或 PATH 后重新运行 `agent-autoloop service install`。
+
+Windows 任务通过系统 `wscript.exe` 隐藏启动 runner，并等待、返回其退出码，不弹控制台窗口。升级后运行一次 `agent-autoloop service install` 替换旧的直接 Node 动作；重装前旧任务仍能运行、查询和移除。交互登录令牌、最低权限和触发器不变。
 
 三个平台的 `agent-autoloop service install` 都会记住 `AGENT_AUTOLOOP_RULES` 指定的自定义规则路径（相对路径按安装时的工作目录转成绝对路径），并在成功后打印规则文件位置；重装采用当前环境的新值，取消设置后重装则移除旧值，恢复使用数据目录下的 `rules.json`。
 
@@ -75,7 +77,7 @@ node C:/code/agent-autoloop/bin/agent-autoloop.ts init --agent codex --no-servic
 node C:/code/agent-autoloop/bin/agent-autoloop.ts up
 ```
 
-测试假扮用户时同时设置临时 `HOME` 和 `USERPROFILE`；只隔离引擎资料、沿用本机 Agent 登录时只设置 `AGENT_AUTOLOOP_HOME`。Windows 的 `cwd` 可用盘符绝对路径、UNC、`~/` 和 `~\`；拒绝 `C:relative` 这类盘符相对路径。脚本 Agent 显式写 `node.exe` 和脚本路径，不依赖 shebang。`service status` 查看后台状态，`service stop` 通过私有控制口停止中台并保留计划任务（下次登录启动），`service remove` 再删除自己的任务。在跑的 Agent 保留给重启后的接单程序认领；要停止任务本身用 `stop <轮次>`。
+测试假扮用户时同时设置临时 `HOME` 和 `USERPROFILE`；只隔离引擎资料、沿用本机 Agent 登录时只设置 `AGENT_AUTOLOOP_HOME`。Windows 的 `cwd` 可用盘符绝对路径、UNC、`~/` 和 `~\`；拒绝 `C:relative` 这类盘符相对路径。脚本 Agent 显式写 `node.exe` 和脚本路径，不依赖 shebang。`service status` 查看后台状态，`service stop` 通过私有控制口停止中台并保留计划任务和停止标记（再次 `service install` 才恢复），`service remove` 再删除自己的任务。在跑的 Agent 保留给重启后的接单程序认领；要停止任务本身用 `stop <轮次>`。
 
 `up` 会一直运行。在 Agent 的命令工具里保留它返回的运行中会话，再用另一条命令完成验证；不要用 `nohup … &` 代替，命令工具可能在退出时清理后台进程。看到监听地址后再运行验证命令；启动失败就先处理该会话里的错误。
 

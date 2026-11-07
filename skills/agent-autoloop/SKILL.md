@@ -33,7 +33,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 Windows 使用 Node 24、Git for Windows、Windows PowerShell 5.1 和系统 .NET Framework 4.x；安装用根目录 `install.ps1`，参数沿用 `init`，详见 `INSTALL.md`。后台计划任务在当前用户登录时和每 5 分钟触发，`IgnoreNew` 保留正在运行的 runner；保留安装终端 PATH，不改系统 PATH、不存密码。`service status` 看常驻状态，`service stop` 保存停止标记，重复触发、重新登录和重启都不恢复，直到再次 `service install`；`service remove` 再删任务。独立 Agent 保留供重启认领；`stop <轮次>` 对 claimed 会结束该轮整个 Job 进程树，对 unknown 只记录本人的结束确认。日志在数据目录 `logs/up.log`。批处理 Agent 使用原生程序或显式 `node` + 脚本；npm Node shim 会直接解析，参数不经 shell。Codex 会探测沙箱实际用户 SID，只共享本轮 `agent/` 资料目录（`read` 只读、`edit` 读写），hub 密钥与 worker 控制记录保持私有，不自动提升为 `full`。
 
-Windows 的接单程序由 `up` 托管为子进程，初始化限时 300 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应只强杀 `up`，由 libuv Job 回收非 detached 子孙，独立 Agent 托管器保留供新 worker 按 Job 名认领。`service stop` 同样保留独立 Agent。runner 本身退出由下一次重复触发恢复。ACL 原生辅助程序每次限 30 秒，仅超时重试一次，不同步启动 PowerShell；准备失败交 failed，权限失败不写秘密。升级后运行一次 `service install` 替换旧 runner 和任务 XML。前台 `up` 需自行重启，不清除停止标记。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
+Windows 的接单程序由 `up` 托管为子进程，初始化限时 300 秒，之后处理进度心跳限时 120 秒；超时会写日志并强制让 `up` 非零退出。服务 runner 对任何退出码按 1–60 秒退避重启，连续健康 5 分钟重置；每 15 秒探测带身份的本机控制口，连续 5 分钟无回应只强杀 `up`，由 libuv Job 回收非 detached 子孙，独立 Agent 托管器保留供新 worker 按 Job 名认领。`service stop` 同样保留独立 Agent。runner 本身退出由下一次重复触发恢复。ACL 原生辅助程序每次限 30 秒，仅超时重试一次，不同步启动 PowerShell；准备失败交 failed，权限失败不写秘密。计划任务通过系统 Windows Script Host 的 `wscript.exe` 和固定 JScript 隐藏启动，不弹控制台窗口，等待并传回 Node 退出码。升级后运行一次 `service install` 替换旧的直接 Node 动作；重装前旧任务仍能运行和查询，交互登录令牌和最低权限不变。前台 `up` 需自行重启，不清除停止标记。接单子进程异常或自行退出同样让中台报错退出，不要只凭 HTTP 能访问判断它还在接活，详见 `docs/windows-service-resilience.md`。
 
 ## 暂停领活、排空与恢复
 

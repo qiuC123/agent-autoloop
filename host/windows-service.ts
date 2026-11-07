@@ -18,6 +18,7 @@ type Options = {
   node?: string;
   program?: string;
   runner?: string;
+  systemRoot?: string;
   searchPath?: string;
   run?: Command;
 };
@@ -47,12 +48,20 @@ export function windowsService(options: Options) {
   const { home, node = process.execPath, searchPath = process.env.PATH ?? "", run = execute } = options;
   const program = options.program ?? path.join(import.meta.dirname, "..", "bin", "agent-autoloop.ts");
   const runner = options.runner ?? path.join(import.meta.dirname, "windows-service.ts");
+  const launcher = path.join(import.meta.dirname, "windows-service-launcher.js");
+  const wscript = path.win32.join(
+    options.systemRoot ?? process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "wscript.exe",
+  );
   const name = `agent-autoloop-${createHash("sha256")
     .update((existsSync(home) ? realpathSync(home) : path.resolve(home)).toLowerCase())
     .digest("hex")
     .slice(0, 16)}`;
   const taskFile = path.join(home, "service-task.xml");
   const configFile = path.join(home, "service.json");
+  const nodeArguments = ["--disable-warning=ExperimentalWarning", runner, configFile].map(quote).join(" ");
+  const hiddenArguments = `//B //E:JScript ${[launcher, node].map(quote).join(" ")} ${nodeArguments}`;
   let owner = options.user;
   const user = () => (owner ??= windowsUserSid());
   const xml = () => `<?xml version="1.0" encoding="UTF-16"?>
@@ -61,7 +70,7 @@ export function windowsService(options: Options) {
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${escape(user())}</UserId></LogonTrigger><TimeTrigger><Repetition><Interval>PT5M</Interval></Repetition><StartBoundary>${new Date(Date.now() + 300_000).toISOString()}</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>
   <Principals><Principal id="Owner"><UserId>${escape(user())}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowHardTerminate>false</AllowHardTerminate><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings>
-  <Actions Context="Owner"><Exec><Command>${escape(node)}</Command><Arguments>${escape(["--disable-warning=ExperimentalWarning", runner, configFile].map(quote).join(" "))}</Arguments><WorkingDirectory>${escape(home)}</WorkingDirectory></Exec></Actions>
+  <Actions Context="Owner"><Exec><Command>${escape(wscript)}</Command><Arguments>${escape(hiddenArguments)}</Arguments><WorkingDirectory>${escape(home)}</WorkingDirectory></Exec></Actions>
 </Task>
 `;
   // schtasks exports XML in the OEM code page; Base64 preserves every character without changing console settings.
@@ -91,9 +100,8 @@ export function windowsService(options: Options) {
       return (
         !/<(?:ComHandler|SendEmail|ShowMessage)\b/.test(actions) &&
         text(content, "Description") === `agent-autoloop ${program}` &&
-        samePath(text(exec, "Command"), node) &&
-        text(exec, "Arguments") ===
-          ["--disable-warning=ExperimentalWarning", runner, configFile].map(quote).join(" ") &&
+        ((samePath(text(exec, "Command"), wscript) && text(exec, "Arguments") === hiddenArguments) ||
+          (samePath(text(exec, "Command"), node) && text(exec, "Arguments") === nodeArguments)) &&
         samePath(text(exec, "WorkingDirectory"), home) &&
         text(principal, "UserId") === user()
       );

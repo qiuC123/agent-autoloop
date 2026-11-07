@@ -8,6 +8,46 @@
 
 Windows 服务由计划任务在登录时和每 5 分钟触发 runner，`up` 的恢复由 `host/windows-service.ts` 的 runner 负责。不能把动作的非零退出码当作计划任务必然重启的保证。
 
+## 隐藏启动（2026-11-07）
+
+旧动作直接启动 `node.exe`，交互登录会出现控制台窗口，误关窗口可能以 `STATUS_CONTROL_C_EXIT` 结束 runner。`host/windows-launcher.ts` 是前台 `.cmd` 入口，不能用于隐藏服务；保留它，新增随引擎发布的 `host/windows-service-launcher.js`。
+
+任务的 Command 改为从 `process.env.SystemRoot` 解析的绝对路径 `System32\wscript.exe`（测试可注入 `systemRoot`）。Arguments 是 `//B //E:JScript "<launcher.js>" "<node>" ...`；JScript 按 Windows 参数规则加引号，调用 `WScript.Shell.Run(cmd, 0, true)` 隐藏并等待，再用 `WScript.Quit` 返回 Node 退出码。没有增加 shell 或运行时包。`InteractiveToken`、`LeastPrivilege`、`IgnoreNew`、触发器和所有其他设置不变。任务管理查询仍使用原来的 PowerShell / Task Scheduler COM。
+
+升级后需运行一次 `agent-autoloop service install`。归属核对接受旧版直接 Node 或新版完整隐藏动作，仍核对程序、完整参数、目录、用户及描述；旧任务在重装前仍可运行、查询和移除，新任务也能正常 `service status`。`service.json`、控制管道、停止标记和业务协议不变。
+
+本机 Windows、Node 24.14.0 实测只使用隔离 home、随机端口、合成事件和本地假 Agent，没有初始化桌面通知或连接真实通道。临时加载钩子仅将任务名前缀改为 `autoloop-hidden-test-`，其余安装、状态、停止和移除使用真实 CLI；未操作已有任务或真实 home。通过 Win32 `EVENT_OBJECT_SHOW` 监听及每 10 毫秒 `EnumWindows` / `IsWindowVisible` 枚举，对比启动前窗口集合。
+
+| 验证 | 结果 |
+|---|---|
+| 安装、运行、恢复、停止期间新增可见顶层窗口 | **0** |
+| 任务动作的父子关系 | `wscript.exe` 等待 Node runner；runner 启动 `up` |
+| Node 返回 0 / 3 / 7 | 直接 WScript 调用和真实任务 `LastTaskResult` 均为 **0 / 3 / 7** |
+| 任务设置及状态 | COM 读回交互登录、最低权限、5 分钟重复及 IgnoreNew；额外 Run 不启动第二个 runner；CLI status 正常 |
+| 健康探测 | 实际身份管道、HTTP `/healthz` 正常；跨过一个 15 秒探测周期后 PID 不变 |
+| 强杀 `up` | 非 detached worker 被 Job 回收；detached guardian 和 Agent 存活；runner 恢复 `up` |
+| 强杀 runner | `up` 随 Job 回收、WScript 返回；guardian 和 Agent 存活；再次触发后恢复 |
+| `service stop` 与重新触发 | runner、`up`、WScript 退出；guardian 存活；停止标记保留，重新触发返回 0 且不启动 `up` |
+| 重新安装并认领 | 清除停止标记，新 worker 收回原 Agent 结果，轮次为 done，业务启动次数仍为 1 |
+| 旧动作升级 | 将已停止的临时任务改回直接 Node，真实 `service install` 成功替换，status 正常 |
+| 清理 | 按精确任务名删除并查询确认不存在，测试进程和临时数据清理 |
+
+没有观察到 WScript 改变 Job 回收或独立 Agent 托管行为。登录、注销和真实 5 分钟调度周期没有在本轮重演；触发器未修改，本轮恢复使用手动触发，之前的定时实测见下文。隐藏启动依赖 Windows Script Host / JScript 可用；前台 `up` 仍保留正常终端行为。
+
+自动回归使用合成 XML、注入的 `SystemRoot` 和临时 home：`service-launcher.test.ts` 验证隐藏、等待、引号、中文/空格路径和退出码；`service-windows.test.ts` 验证新旧动作及错误归属；`service-supervision.test.ts` 通过真实 WScript 运行看门狗、退避和持久停止测试（只有控制台事件专用试验仍使用独立隐藏控制台）。健康超时测试沿用原来的加速时钟，不缩短原生辅助程序期限。真实计划任务验证不进入自动测试套件。
+
+本轮受影响的八个测试文件 **38/38 通过，0 跳过**；`npm run typecheck`、`npm run format:check` 和 `git diff --check` 通过，完整套件交给 CI。
+
+```sh
+node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/service-windows.test.ts tests/service-launcher.test.ts tests/service-supervision.test.ts tests/service.test.ts tests/install-windows.test.ts tests/uninstall-windows.test.ts tests/windows-worker.test.ts tests/worker-process.test.ts
+```
+
+### Hidden startup (English)
+
+The scheduled task now invokes the absolute system `wscript.exe` with `//B //E:JScript`, using the bundled `host/windows-service-launcher.js`. `WScript.Shell.Run(command, 0, true)` hides and waits for Node; `WScript.Quit` preserves its exit code. The existing `.cmd` launcher is for foreground use. InteractiveToken, least privilege, IgnoreNew and all triggers/settings are unchanged. Run `agent-autoloop service install` once after upgrading; ownership checks accept both the legacy direct Node action and the exact hidden action, so old tasks remain usable and status works before and after reinstalling.
+
+Local Windows / Node 24.14.0 verification used an isolated home, a randomly named temporary task, a random port and synthetic work only. Window-show events plus 10 ms visible-window enumeration recorded **zero new visible top-level windows**. Task Scheduler returned **0, 3 and 7** unchanged. Killing `up` or the runner reaped non-detached descendants while detached guardians survived. After stop/reinstall, the new worker recovered the original result with only one business launch. Health checks, IgnoreNew, persistent stop, status and legacy-action replacement passed. Temporary tasks and processes were removed. This run did not repeat login/logout or a full five-minute trigger interval; it used manual task triggers and left the production triggers unchanged.
+
 ## 计划任务实测
 
 2026-11-05，Windows 11、Node 24.14.0。仅创建一个名字带随机 UUID 的临时任务，使用当前用户的 `InteractiveToken`、`LeastPrivilege`、`IgnoreNew`、无运行时限、`AllowHardTerminate=false`，`RestartOnFailure` 为 `PT1M`、999 次。通过 Task Scheduler COM 注册并读回 XML，手动 `Run`；动作直接启动 Node，向临时 JSONL 追加时间和 PID 后退出。两轮之间删除并重新注册同名临时任务，不改任何已有任务。
@@ -37,9 +77,9 @@ Windows 服务由计划任务在登录时和每 5 分钟触发 runner，`up` 的
 - 5 分钟容纳了启动时的 ACL 编译、worker 启动准备（其独立看门狗现为 300 秒）、120 秒 worker 进度检查，以及现场一分钟级的资源争用。长时间 Agent 任务和 50 秒领活在别的进程或异步请求里，不需要阻塞 hub 主线程；该期限不限制 Agent 任务总时长。
 - runner 有独立的 `service.pid` 和带 token 的控制管道。`service stop` 先写私有 `service.stopped` 标记，再停止 runner 和 `up`，退避期间、runner 已退出或 hub 卡死时也保存停止意图。普通停止先请求 `up` 正常退出，5 秒内未退出则只强杀 `up`；普通停止和健康看门狗都保留独立 Agent。
 - runner 启动时发现停止标记就退出 0，不创建 `up`；重复触发、重新登录、重启电脑均保持停止。恢复使用 `service install`：先验证旧任务归属，成功覆盖 XML 后才删除停止标记并启动。没有新增 `service start` 命令；直接前台 `up` 不清除标记。
-- `up` 保持非 detached 子进程，runner 被强杀时 Node/libuv 会回收它和非独立子孙；独立 Agent 仍按原有持久记录恢复。runner 忽略 `SIGINT`、`SIGBREAK`。强杀、注销、关机或控制台关闭仍可能结束 runner；未主动 stop 且用户保持登录时，由下一次重复触发补起。Windows 关闭事件有系统终止期限，JS 信号监听不能取消它。[控制台事件说明](https://learn.microsoft.com/en-us/windows/console/handlerroutine)
+- `up` 保持非 detached 子进程，runner 被强杀时 Node/libuv 会回收它和非独立子孙；独立 Agent 仍按原有持久记录恢复。runner 忽略 `SIGINT`、`SIGBREAK`。强杀、注销或关机仍可能结束 runner；未主动 stop 且用户保持登录时，由下一次重复触发补起。新版隐藏启动不再显示可供误关的控制台；旧任务在重装前仍可能被关闭窗口终止。Windows 关闭事件有系统终止期限，JS 信号监听不能取消它。[控制台事件说明](https://learn.microsoft.com/en-us/windows/console/handlerroutine)
 
-服务配置、任务名和任务动作参数兼容旧版；归属校验仍核对动作程序、参数、目录及用户，不把新增触发器当作旧任务不属于本程序的理由。控制文件和停止标记不改变 HTTP、密钥或事实日志。升级后需主动运行一次 `service install` 替换旧 runner 并覆盖旧 XML，启用重复触发。前台 `up` 不带 runner，仍需自行重启。本次开发没有对真实服务执行升级或重启。
+服务配置和任务名兼容旧版；归属校验同时接受旧版直接 Node 与新版隐藏动作，仍核对动作程序、参数、目录及用户，不把新增触发器当作旧任务不属于本程序的理由。控制文件和停止标记不改变 HTTP、密钥或事实日志。升级后需主动运行一次 `service install` 替换旧 runner 并覆盖旧 XML，启用隐藏启动和重复触发。前台 `up` 不带 runner，仍需自行重启。本次开发没有对真实服务执行升级或重启。
 
 ## `0xC000013A` 能说明什么
 

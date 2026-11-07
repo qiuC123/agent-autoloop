@@ -120,14 +120,16 @@ export const parseRules = (json: string, now = Date.now()) =>
   checkRules(json, now, Intl.DateTimeFormat().resolvedOptions().timeZone);
 export { RulesError, typeMatches };
 export let rules = query.configuration(current);
-let loaded = { file: "", mtime: 0 };
+let loaded = { file: "", mtime: 0, text: "" };
 
 export function reloadRules(file = RULES_FILE) {
   const mtime = statSync(file).mtimeMs;
-  if (loaded.file === file && loaded.mtime === mtime) return { changed: false };
-  loaded = { file, mtime };
+  // Two writes can share one timestamp tick, so an unchanged mtime alone does not prove unchanged rules.
+  const text = readFileSync(file, "utf8");
+  if (loaded.file === file && loaded.mtime === mtime && loaded.text === text) return { changed: false };
+  loaded = { file, mtime, text };
   try {
-    const next = parseRules(readFileSync(file, "utf8"));
+    const next = parseRules(text);
     const differs = JSON.stringify(next) !== JSON.stringify(query.configuration(getView()));
     const reportedBroken = (card: Row) => card.key.startsWith("rules:") && card.state === "open";
     if (differs || rows(current, "cards", { state: "open" }).some(reportedBroken)) execute("rules", [next]);

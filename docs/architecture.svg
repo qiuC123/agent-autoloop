@@ -157,10 +157,10 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 <text x="324" y="414.5" class="n" text-anchor="middle">5</text>
 <text x="232" y="415" class="l" text-anchor="end">点一下，接着原对话干完</text>
 
-<text x="480" y="568" class="s" text-anchor="middle">宿主维护闸门：本人暂停 → 排空 → 保持（重启不放开）→ 显式恢复；内核只收允许领取的布尔值</text>
+<text x="480" y="558" class="s" text-anchor="middle">维护：本人暂停 → 排空（unknown 可由本人核实后按未完成结束）→ 保持 → 显式恢复</text>
 
 <!-- 底部：交付流水线 -->
-<text x="480" y="569" class="s" text-anchor="middle">Windows：任务每 5 分钟补起 runner；看门狗只回收 up，保留独立 Agent；停止跨登录生效</text>
+<text x="480" y="576" class="s" text-anchor="middle">Windows：ACL 每次 30 秒、超时重试一次；准备失败交回 failed；看门狗保留独立 Agent</text>
 <rect class="plug" x="22" y="584" width="916" height="72" rx="14"/>
 <text x="40" y="614" class="h2">代码交付流水线</text>
 <text x="40" y="636" class="s">内置插件示例（事件 + Agent）</text>

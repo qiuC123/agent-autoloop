@@ -1,19 +1,14 @@
 // Secret files inherit the private directory ACL; existing files also lose any explicit grants to other users.
-import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { aclHelper } from "./windows-acl.ts";
+import { aclHelper, runAclCommand } from "./windows-acl.ts";
 
 const protectedDirectories = new Set<string>();
 function protect(file: string, directory: boolean, agent?: { sid: string; access: "read" | "edit" }) {
   if (process.platform !== "win32") return chmodSync(file, directory ? 0o700 : 0o600);
   const absolute = path.resolve(file);
   if (directory && !agent && protectedDirectories.has(absolute)) return;
-  execFileSync(aclHelper(), [absolute, directory ? "directory" : "file", ...(agent ? [agent.sid, agent.access] : [])], {
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-    timeout: 5_000,
-  });
+  runAclCommand(aclHelper(), [absolute, directory ? "directory" : "file", ...(agent ? [agent.sid, agent.access] : [])]);
   if (directory && !agent) protectedDirectories.add(absolute);
   if (agent) protectedDirectories.delete(absolute);
 }

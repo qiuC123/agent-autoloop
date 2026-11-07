@@ -1,6 +1,7 @@
 // Failure modes: maintenance races a claim or a waking long poll; recovery loses an existing claim or receipt;
 // unstarted or unknown runs are mistaken for drained work; restart, expiry, missing files or corrupt files reopen
 // the gate; stale IDs or non-owner credentials release it; rejected rules look accepted; timers/cards stop progressing.
+// Owner settlement must release unknown work without accepting late receipts or giving workers owner powers.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -151,6 +152,53 @@ test("unknown runs block hold until a late result arrives", async () => {
   assert.equal((await finish(job)).status, 200);
   assert.equal((await control("hold", { id })).body.mode, "held");
 });
+
+for (const action of ["cancel", "answer"]) {
+  test(`the owner can settle unknown work through ${action} and then hold maintenance`, async () => {
+    event(`settle-${action}`);
+    const job = (await work(keys.w1, `settle-${action}`)).body.job;
+    const { id } = (await drain()).body;
+    const later = Date.now() + 6 * 60_000;
+    hub.heartbeat("w1", [], later);
+    hub.sweep(later);
+    const card = hub.one<any>("SELECT * FROM cards WHERE key = ?", [`run:${job.run}:unknown`]);
+    assert.ok(card);
+    assert.equal((await call("/v1/state")).body.totals.unknown, 1);
+    assert.equal((await control("hold", { id })).status, 409);
+    const endpoint = action === "cancel" ? `/v1/runs/${job.run}/cancel` : `/v1/cards/${card.id}/answer`;
+    for (const key of ["", keys.w1, keys.app, keys.chat, job.token])
+      assert.equal((await call(endpoint, key, {})).status, 401);
+    assert.equal((await call(endpoint, keys.owner, {})).status, 200);
+    const settled = { ...hub.getView().get("runs", job.run)! };
+    assert.equal(settled.state, "cancelled");
+    assert.ok(settled.finished_at);
+    assert.equal(settled.summary, "本人确认按未完成结束");
+    assert.match(card.text, /已处理.*按未完成结束/);
+    const closed = { ...hub.getView().get("cards", card.id)! };
+    assert.equal(closed.state, "closed");
+    assert.equal(closed.result, settled.summary);
+    assert.equal((await call("/v1/state")).body.totals.unknown, 0);
+    assert.equal((await control("hold", { id })).body.mode, "held");
+    assert.deepEqual((await call(`/v1/cards/${card.id}/answer`, keys.owner, {})).body, {
+      changed: false,
+      state: "closed",
+    });
+    const seq = hub.getView().seq;
+    for (const outcome of ["done", "failed", "cancelled"]) {
+      const late = {
+        outcome,
+        notice: [{ title: "late", text: "must not apply" }],
+        events: [{ id: "late", type: "feedback.new" }],
+        later: [{ key: "late", at: future(), about: "late" }],
+      };
+      assert.equal((await finish(job, late)).status, 401);
+      assert.equal((await finish(job, late)).status, 401);
+    }
+    assert.deepEqual(hub.getView().get("runs", job.run), settled);
+    assert.deepEqual(hub.getView().get("cards", card.id), closed);
+    assert.equal(hub.getView().seq, seq, "rejected late receipts cannot write facts or dispatch downstream work");
+  });
+}
 
 test("a long poll rechecks the gate after wakeup and resume wakes queued work", async () => {
   const abort = new AbortController();

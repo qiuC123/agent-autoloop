@@ -502,7 +502,7 @@ async function checkConformance(args: string[]) {
 
 async function stop(args: string[]) {
   await ownerClient().cancel(Number(args[0]));
-  console.log("通知它停了。");
+  console.log("停止请求已处理。");
 }
 
 function service(args: string[]) {

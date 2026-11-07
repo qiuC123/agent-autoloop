@@ -13,7 +13,11 @@
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
+// A private-file/ACL failure must report failed, retain an unacknowledged result, and never launch unprotected work.
 import assert from "node:assert/strict";
+import cp from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -132,6 +136,118 @@ async function until(worker: { tick(): Promise<boolean> }, done: () => boolean, 
 }
 const worker = (hub: ReturnType<typeof fakeHub>, more: object = {}) =>
   createWorker({ hub: hub as any, name: "w1", wait: 0, ...more });
+
+for (const stage of ["run", "context"]) {
+  test(
+    `exhausted ACL timeouts at ${stage} preparation report failed instead of losing the claim`,
+    { skip: process.platform !== "win32" },
+    async (t) => {
+      const kernel = await import("../host/runtime.ts");
+      const hub = fakeHub();
+      kernel.ingest("app", { id: `acl-${stage}`, type: "feedback.new", subject: stage });
+      const given = kernel.claimNext("w1", `acl-${stage}`)!;
+      given.agent.use = "command";
+      const marker = join(folder, `unsafe-${stage}`);
+      given.agent.command = node(`require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`);
+      given.rule.cwd = folder;
+      hub.jobs.push(given);
+      const logs: string[] = [];
+      const w = worker(hub, { log: (line: string) => logs.push(line) });
+      const dir = join(home, "worker", "runs", `${given.run}-${given.attempt}`);
+      const target = stage === "run" ? dir : join(dir, "agent");
+      const original = cp.execFileSync;
+      let attempts = 0;
+      const mocked = t.mock.method(cp, "execFileSync", ((program: string, args: string[], options: any) => {
+        if (program.endsWith("acl.exe") && args[0] === target) {
+          attempts++;
+          throw Object.assign(new Error("设置本轮私有目录失败：synthetic ACL timeout"), { code: "ETIMEDOUT" });
+        }
+        return original(program, args, options);
+      }) as typeof original);
+      syncBuiltinESMExports();
+      try {
+        assert.equal(await w.tick(), true, "a local ACL failure is not a hub outage");
+        await w.tick();
+        assert.equal(hub.results.length, 1);
+        assert.equal(hub.results[0].outcome, "failed");
+        assert.match(hub.results[0].error, /ACL.*timeout/);
+        assert.ok(attempts >= 2 && attempts % 2 === 0, "each timed-out operation has one retry");
+        const { run, token, ...result } = hub.results[0];
+        kernel.finish(run, token, result);
+        const later = Date.now() + 6 * 60_000;
+        kernel.heartbeat("w1", [], later);
+        kernel.sweep(later);
+        const recorded = kernel.getView().get("runs", given.run)!;
+        assert.equal(recorded.state, "queued", "failed keeps the protocol's delayed retry semantics");
+        assert.equal(recorded.attempts, 1);
+        assert.match(recorded.error, /ACL.*timeout/);
+        assert.equal(kernel.stateOf().totals.unknown, 0);
+        assert.equal(existsSync(marker), false);
+        assert.equal(existsSync(join(target, stage === "run" ? "entry.json" : "context.json")), false);
+        assert.equal(w.entries().length, 0);
+        assert.ok(!logs.some((line) => line.includes("couldn't reach the hub")));
+      } finally {
+        mocked.mock.restore();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+}
+
+for (const stage of ["initial", "result"]) {
+  test(`a ${stage} private entry write failure does not lose the failure result when the hub also retries`, async (t) => {
+    const hub = fakeHub();
+    const given = job({ use: "no-such-adapter" });
+    hub.jobs.push(given);
+    hub.failResults = 1;
+    const w = worker(hub);
+    const target = join(home, "worker", "runs", `${given.run}-${given.attempt}`, "entry.json.tmp");
+    const original = fs.writeFileSync;
+    const mocked = t.mock.method(fs, "writeFileSync", ((file: any, data: any, options: any) => {
+      if (String(file) === target && (stage === "initial" || String(data).includes('"result":')))
+        throw Object.assign(new Error("无法保存私有文件：synthetic write failure"), { code: "EACCES" });
+      return original(file, data, options);
+    }) as typeof original);
+    syncBuiltinESMExports();
+    try {
+      assert.equal(await w.tick(), true);
+      await w.tick();
+      assert.equal(w.entries().length, 1, "keep the token and failure until the hub acknowledges them");
+      assert.ok(hub.claims.at(-1).running.includes(given.run));
+      await w.tick();
+      assert.equal(hub.results.length, 1);
+      assert.equal(hub.results[0].outcome, "failed");
+      assert.match(hub.results[0].error, stage === "initial" ? /private|私有/ : /no-such-adapter/);
+      assert.equal(w.entries().length, 0);
+    } finally {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+}
+
+test("a private record write failure after launch keeps tracking the agent instead of retrying its business", async (t) => {
+  const hub = fakeHub();
+  const given = job();
+  hub.jobs.push(given);
+  const w = worker(hub);
+  const target = join(home, "worker", "runs", `${given.run}-${given.attempt}`, "entry.json.tmp");
+  const original = fs.writeFileSync;
+  const mocked = t.mock.method(fs, "writeFileSync", ((file: any, data: any, options: any) => {
+    if (String(file) === target && String(data).includes('"pid":') && !String(data).includes('"result":'))
+      throw Object.assign(new Error("synthetic post-launch write failure"), { code: "EACCES" });
+    return original(file, data, options);
+  }) as typeof original);
+  syncBuiltinESMExports();
+  try {
+    await until(w, () => hub.results.length === 1);
+    assert.equal(hub.results[0].outcome, "done");
+    assert.equal(w.entries().length, 0);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
 
 test("a job runs in its rule's folder with the prompt and context file, and without the hub's secrets", async () => {
   const hub = fakeHub();

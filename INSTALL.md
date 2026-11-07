@@ -45,11 +45,11 @@ $env:AGENT_AUTOLOOP_REPO = 'C:/code/agent-autoloop'
 
 `--agent claude` 选择 Claude Code；只有其他 CLI 时加 `--command 'hermes chat -q {prompt}'`。不指定时会检测本机安装的 Agent，第一种作为试跑对象。
 
-Windows 的接单子进程初始化超过 30 秒或处理进度心跳中断超过 120 秒时，`up` 会记录原因并强制以非零状态退出，由服务 runner 重启。看门狗同样只结束 `up`，libuv Job 回收 worker、通道和卡住的非 detached 原生子孙；detached Agent 托管器继续运行，供新 worker 按持久化 Job 名认领。`service stop` 先写私有 `service.stopped` 标记，再停止 runner 和 `up`，卡死或 runner 已死时也能保存停止意图；重复触发、重新登录、重启电脑均保持停止，直到再次 `service install`。前台 `up` 不清除此标记，也不带自动恢复。升级后执行一次 `service install` 替换旧 runner 并重写任务 XML；旧任务归属校验、`service.json` 格式不变，成功注册后才清除停止标记。实测和阈值说明见 [Windows 服务恢复调查](docs/windows-service-resilience.md)。
+Windows 的接单子进程初始化超过 300 秒或处理进度心跳中断超过 120 秒时，`up` 会记录原因并强制以非零状态退出，由服务 runner 重启。看门狗同样只结束 `up`，libuv Job 回收 worker、通道和卡住的非 detached 原生子孙；detached Agent 托管器继续运行，供新 worker 按持久化 Job 名认领。`service stop` 先写私有 `service.stopped` 标记，再停止 runner 和 `up`，卡死或 runner 已死时也能保存停止意图；重复触发、重新登录、重启电脑均保持停止，直到再次 `service install`。前台 `up` 不清除此标记，也不带自动恢复。升级后执行一次 `service install` 替换旧 runner 并重写任务 XML；旧任务归属校验、`service.json` 格式不变，成功注册后才清除停止标记。实测和阈值说明见 [Windows 服务恢复调查](docs/windows-service-resilience.md)。
 
 程序装进 `~/.agent-autoloop/app`，配置和记录留在 `~/.agent-autoloop`（Windows 的 `~` 是 `USERPROFILE`）。默认打开桌面通知；没有图形会话时安静跳过，问题仍能用 `agent-autoloop status` 查看。命令优先放在 PATH 中的 `~/.local/bin`，否则选 PATH 里第一个可写目录，不用 sudo、不覆盖其他程序；Windows 生成 `.cmd` 入口，不修改系统 PATH，没有位置时使用安装器打印的完整路径。
 
-安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。运行时 ACL 使用系统 .NET 编译的私有辅助程序，每进程首次编译限 30 秒、权限操作限 5 秒；失败就报错，不继续写秘密，不再为 ACL 启动 PowerShell。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
+安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。运行时 ACL 使用系统 .NET 编译的私有辅助程序，身份查询、编译目录保护、编译及权限设置每次限 30 秒，仅超时重试一次；本轮准备失败交回 failed，不继续写秘密，不再为 ACL 启动 PowerShell。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
 升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
 
@@ -111,7 +111,7 @@ Claude 要委托 Codex 处理网页时，可用[浏览器交接模板](examples/
 
 ## 部署时保持维护
 
-支持维护 API 的引擎可先用本人密钥向 `POST /v1/maintenance` 发送 `drain`（带将来的 `deadline`），保存返回的 `id`；`GET` 看到 `claimed=0`、`unknown=0` 后，以该 ID 发送 `hold`，成功后再停服务、更新和启动。新进程仍保持 held；核对 `problem=null`、状态与生效规则的 `rules_version` / `rules_hash` 后，以同一 ID 显式 `resume`。到期不会自动恢复，要核对后 `renew` 再 resume。首次升级前的旧引擎尚不支持此流程；完整请求见[维护协议](docs/protocol.md#持久维护闸门)。
+支持维护 API 的引擎可先用本人密钥向 `POST /v1/maintenance` 发送 `drain`（带将来的 `deadline`），保存返回的 `id`；有 unknown 且结果不会回来时，本人核实旧执行已停止和实际业务状态，再用 `stop <轮次>` 或该轮通知的“已处理”按未完成结束；`GET` 看到 `claimed=0`、`unknown=0` 后，以该 ID 发送 `hold`，成功后再停服务、更新和启动。新进程仍保持 held；核对 `problem=null`、状态与生效规则的 `rules_version` / `rules_hash` 后，以同一 ID 显式 `resume`。到期不会自动恢复，要核对后 `renew` 再 resume。首次升级前的旧引擎尚不支持此流程；完整请求见[维护协议](docs/protocol.md#持久维护闸门)。
 
 `<home>/maintenance.json` 是宿主控制文件，不手动删除或改成 normal；缺损会关闭新领取，状态会说明问题。数据库中的宿主初始化标记让重启和投影重建也能识别文件丢失。备份、恢复时一起保留 `maintenance.json`、`hub.db` 和 `master.key`。
 

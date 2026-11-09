@@ -434,6 +434,9 @@
             "cwd": {
               "type": "string"
             },
+            "workspace": {
+              "enum": ["run"]
+            },
             "skill": {
               "type": "string"
             },

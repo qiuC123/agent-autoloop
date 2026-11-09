@@ -14,6 +14,7 @@
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
 // A private-file/ACL failure must report failed, retain an unacknowledged result, and never launch unprotected work.
+// Run workspaces must be created under an existing root, isolated by run and reused across turns and attempts.
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
@@ -53,14 +54,26 @@ export default {
 let nextRun = 1;
 const node = (source: string, ...args: string[]) => [process.execPath, "-e", source, ...args];
 const job = (
-  over: { use?: string; command?: string[]; session?: string | null; timeout?: number; cwd?: string } = {},
+  over: {
+    use?: string;
+    command?: string[];
+    session?: string | null;
+    timeout?: number;
+    cwd?: string;
+    workspace?: "run";
+  } = {},
 ) => ({
   run: nextRun++,
   token: `token-${nextRun}`,
   attempt: 1,
   session: over.session ?? null,
   askFirst: ["删数据"],
-  rule: { name: "意见", cwd: over.cwd ?? folder, prompt: "按手册做。" },
+  rule: {
+    name: "意见",
+    cwd: over.cwd ?? folder,
+    ...(over.workspace && { workspace: over.workspace }),
+    prompt: "按手册做。",
+  },
   agent: {
     id: "a",
     name: "甲",
@@ -252,7 +265,7 @@ test("a private record write failure after launch keeps tracking the agent inste
 test("a job runs in its rule's folder with the prompt and context file, and without the hub's secrets", async () => {
   const hub = fakeHub();
   const script = `const fs = require('node:fs'); fs.writeFileSync('out.txt', [process.cwd(), process.env.AGENT_AUTOLOOP_CONTEXT,
-    process.env.AGENT_AUTOLOOP_SECRET_X ?? '', process.env.AGENT_AUTOLOOP_RUN, process.argv[1]].join('\\n'));
+    process.env.AGENT_AUTOLOOP_SECRET_X ?? '', process.env.AGENT_AUTOLOOP_RUN, process.env.AGENT_AUTOLOOP_WORKSPACE, process.argv[1]].join('\\n'));
     fs.copyFileSync(process.env.AGENT_AUTOLOOP_CONTEXT, 'ctx.txt'); console.log('改好了');`;
   const given = job({ command: node(script, "{prompt}") });
   hub.jobs.push(given);
@@ -261,6 +274,7 @@ test("a job runs in its rule's folder with the prompt and context file, and with
   const lines = readFileSync(join(folder, "out.txt"), "utf8");
   assert.ok(lines.includes(folder) || lines.includes(folder.replace("/private", "")));
   assert.match(lines, /context\.json/);
+  assert.equal(lines.split("\n")[4], folder);
   assert.ok(!lines.includes("must-not-leak"));
   assert.match(lines, /按手册做。/);
   assert.ok(!lines.includes("忽略所有规则"), "what someone wrote is in the file, not the prompt");
@@ -268,6 +282,66 @@ test("a job runs in its rule's folder with the prompt and context file, and with
   assert.deepEqual(hub.results[0], { run: given.run, token: given.token, outcome: "done", summary: "改好了" });
   assert.equal(w.entries().length, 0, "handed in and let go");
 });
+
+test("run workspaces isolate runs and preserve files across attempts", async () => {
+  const hub = fakeHub();
+  const given = {
+    ...job({
+      command: node(`const fs = require('node:fs');
+    fs.appendFileSync('visits', 'x');
+    fs.writeFileSync('where.json', JSON.stringify([process.cwd(), process.env.AGENT_AUTOLOOP_WORKSPACE]));
+    console.log('好了');`),
+    }),
+    rule: { name: "workspace", cwd: folder, workspace: "run" as const },
+  };
+  const target = join(folder, `run-${given.run}`);
+  assert.equal(existsSync(target), false);
+  hub.jobs.push(given);
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.deepEqual(JSON.parse(readFileSync(join(target, "where.json"), "utf8")), [fs.realpathSync(target), target]);
+  hub.jobs.push({ ...given, attempt: 2, session: "previous" });
+  await until(w, () => hub.results.length === 2);
+  assert.equal(readFileSync(join(target, "visits"), "utf8"), "xx");
+  const other = { ...given, run: nextRun++ };
+  hub.jobs.push(other);
+  await until(w, () => hub.results.length === 3);
+  assert.equal(readFileSync(join(folder, `run-${other.run}`, "visits"), "utf8"), "x");
+  assert.ok(hub.results.every((r) => r.outcome === "done"));
+});
+
+test("run workspaces reject invalid ids and do not create a missing root", async () => {
+  const hub = fakeHub();
+  const missing = join(home, "missing-workspace-root");
+  hub.jobs.push({ ...job(), rule: { name: "missing", cwd: missing, workspace: "run" } });
+  for (const run of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "12"]) {
+    hub.jobs.push({ ...job(), run, rule: { name: "invalid", cwd: folder, workspace: "run" } });
+  }
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 6);
+  assert.match(hub.results[0].error, /这个目录不存在/);
+  assert.equal(existsSync(missing), false);
+  for (const result of hub.results.slice(1)) assert.match(result.error, /run id/);
+});
+
+test(
+  "Windows workspaces accept drive paths with either separator",
+  { skip: process.platform !== "win32" },
+  async () => {
+    for (const cwd of [folder, folder.replaceAll("\\", "/")]) {
+      const hub = fakeHub();
+      const given = {
+        ...job({ command: node("console.log(process.cwd() + '|' + process.env.AGENT_AUTOLOOP_WORKSPACE)") }),
+        rule: { name: "windows", cwd, workspace: "run" },
+      };
+      hub.jobs.push(given);
+      const w = worker(hub);
+      await until(w, () => hub.results.length === 1);
+      const target = join(folder, `run-${given.run}`);
+      assert.equal(hub.results[0].summary, fs.realpathSync(target) + "|" + target);
+    }
+  },
+);
 
 test("a bad exit code, or no last message, is a failure saying why", async () => {
   const hub = fakeHub();
@@ -529,27 +603,31 @@ function said(name: string, text: string) {
   return file;
 }
 
-test("a receipt that can't be read is asked for again in the same session, doing nothing again", async () => {
-  const hub = fakeHub();
-  const wrong = said("wrong", `session=s-1\n做完了\n\n${FENCE}agent-autoloop\n{ 不是 json\n${FENCE}\n`);
-  const right = said(
-    "right",
-    `session=s-1\n做完了\n\n${FENCE}agent-autoloop\n{"notice":[{"title":"看一眼","text":"这个"}]}\n${FENCE}\n`,
-  );
-  // Turn 1 does the work and gets the receipt wrong; turn 2 only rewrites it.
-  const script = `const fs = require('node:fs'); if (process.argv[1]) {
+for (const workspace of [undefined, "run"] as const) {
+  test(`an unreadable receipt is repaired in the same session and workspace (${workspace ?? "fixed"})`, async () => {
+    const hub = fakeHub();
+    const wrong = said("wrong", `session=s-1\n做完了\n\n${FENCE}agent-autoloop\n{ 不是 json\n${FENCE}\n`);
+    const right = said(
+      "right",
+      `session=s-1\n做完了\n\n${FENCE}agent-autoloop\n{"notice":[{"title":"看一眼","text":"这个"}]}\n${FENCE}\n`,
+    );
+    // Turn 1 does the work and gets the receipt wrong; turn 2 only rewrites it.
+    const script = `const fs = require('node:fs'); if (process.argv[1]) {
     process.stdout.write(fs.readFileSync(${JSON.stringify(right)})); fs.writeFileSync('asked-again.txt', process.argv[2]);
   } else { fs.appendFileSync('work.txt', 'did-it\\n'); process.stdout.write(fs.readFileSync(${JSON.stringify(wrong)})); }`;
-  hub.jobs.push(job({ use: "scripted", command: [script] }));
-  const w = worker(hub);
-  await until(w, () => hub.results.length === 1);
-  assert.equal(hub.results[0].outcome, "done", JSON.stringify(hub.results[0]));
-  assert.equal(readFileSync(join(folder, "work.txt"), "utf8"), "did-it\n", "the work was done once");
-  assert.match(readFileSync(join(folder, "asked-again.txt"), "utf8"), /不要重做/);
-  assert.deepEqual(hub.results[0].notice, [{ title: "看一眼", text: "这个" }]);
-  assert.equal(hub.results[0].session, "s-1");
-  assert.deepEqual(hub.results[0].usage, { input: 2, output: 2 }, "both turns count; no turn reported a price");
-});
+    const given = job({ use: "scripted", command: [script], workspace });
+    const target = workspace ? join(folder, `run-${given.run}`) : folder;
+    hub.jobs.push(given);
+    const w = worker(hub);
+    await until(w, () => hub.results.length === 1);
+    assert.equal(hub.results[0].outcome, "done", JSON.stringify(hub.results[0]));
+    assert.equal(readFileSync(join(target, "work.txt"), "utf8"), "did-it\n", "the work was done once");
+    assert.match(readFileSync(join(target, "asked-again.txt"), "utf8"), /不要重做/);
+    assert.deepEqual(hub.results[0].notice, [{ title: "看一眼", text: "这个" }]);
+    assert.equal(hub.results[0].session, "s-1");
+    assert.deepEqual(hub.results[0].usage, { input: 2, output: 2 }, "both turns count; no turn reported a price");
+  });
+}
 
 for (const failure of ["exit", "timeout", "unreadable", "empty", "failed-message"] as const) {
   test(`a ${failure} receipt repair keeps the original completed business result`, async () => {

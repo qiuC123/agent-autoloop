@@ -33,6 +33,8 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 | `link(session)` | 可选，会话链接；支持会话的插件可只重写错误回执 |
 | `check()` | 可选，能用返回 `null`，否则返回下一步怎么做 |
 
+规则的 `workspace: "run"` 由接单程序落实为 `<cwd>/run-<run id>`；插件收到的 `turn.cwd` 和环境变量 `AGENT_AUTOLOOP_WORKSPACE` 已是实际目录。不设时两者仍是展开 `~` 后的规则 `cwd`。
+
 `turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。
 
 在规则里选择这个插件：

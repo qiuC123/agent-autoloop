@@ -3,6 +3,7 @@
 // Required job structure and inherited object names must not bypass schema checks; Unicode limits count code points.
 // Input labels must agree with receipt validation and answer versions must be positive safe integers.
 // The optional job.rule.ask permission must remain boolean on the wire.
+// Workspace mode must remain restricted to run on the wire.
 // A truthy non-boolean FYI flag must not silently hide an actionable notice.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -76,6 +77,13 @@ test("job schemas accept an omitted or boolean ask permission, not other values"
     context: { events: [], answers: [], timers: [], waiting: [], open: [], decided: [] },
   };
   assert.deepEqual(checkSchema("job", job), []);
+  for (const workspace of ["run", null, "thread", false, 1, [], {}]) {
+    assert.deepEqual(
+      checkSchema("job", { ...job, rule: { ...job.rule, workspace } }),
+      workspace === "run" ? [] : ["job.rule.workspace"],
+    );
+  }
+
   for (const ask of [false, true, null, "false", 0, [], {}]) {
     assert.deepEqual(
       checkSchema("job", { ...job, rule: { ...job.rule, ask } }),

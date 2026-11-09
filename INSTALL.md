@@ -139,3 +139,5 @@ agent-autoloop uninstall
 开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db`、`maintenance.json` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
 
 Windows Codex 插件按当前权限模式和登录环境运行 `codex sandbox`，取得实际用户 SID 后，只授权本轮的 `agent/` 资料目录：`read` 只读，默认 `edit` 可读写。父目录里的 worker 轮次凭据、退出标记及启动参数不共享；`hub.db`、`master.key`、`secrets.env`、`config.json` 仍只由当前用户读取。不会修改沙箱配置或自动改用 `full`。
+
+规则可设 `"workspace": "run"`，让已存在的 `cwd` 作为独立运行目录的根；使用前须同步更新中台和接单程序，旧接单程序不保证落实新字段。详见 [规则协议](docs/protocol.md#规则)。

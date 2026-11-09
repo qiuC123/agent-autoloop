@@ -14,7 +14,7 @@ test("rules accept absolute Windows directories and reject ambiguous relative pa
     sources: { local: { name: "local" } },
     agents: { local: { name: "local", worker: "local", use: "command", command: ["node"] } },
     channels: {},
-    rules: [{ name: "local", when: { source: "local", types: ["try"] }, to: "local", cwd: "" }],
+    rules: [{ name: "local", when: { source: "local", types: ["try"] }, to: "local", cwd: "", workspace: "run" }],
   };
   for (const cwd of ["C:\\work", "E:/work", "\\\\server\\share\\work", "~/work", "~\\work", "/work"]) {
     rules.rules[0].cwd = cwd;

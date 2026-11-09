@@ -77,6 +77,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
         typeof value === "string" && /^(~[\\/]|\/|[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))/i.test(value),
       "要是绝对路径或 ~/ 开头的目录",
     ],
+    ["workspace", (value) => value === "run", "只能是 run", true],
     ["skill", isText, NOT_EMPTY, true],
     ["prompt", isText, NOT_EMPTY, true],
     ["group", isText, NOT_EMPTY, true],

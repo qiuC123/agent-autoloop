@@ -17,6 +17,8 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 改 `rules.json`，运行 `agent-autoloop check`。几秒内生效；写错了旧规则继续跑，并推一张卡片说错在哪。尚未领取的任务在领活时一起更新 Agent、目录和权限；已领取任务的 Job 配置与接单程序保留到这次执行结束。
 
+可选 `"workspace": "run"` 把已存在的 `cwd` 当根目录，自动在 `<cwd>/run-<run id>` 启动；同 run 的回执修复与失败重试复用，不同 run 分开。回答卡片会创建新 run 和新目录，Claude 可能无法按原目录续会话。不写保持原行为。`AGENT_AUTOLOOP_WORKSPACE` 是实际工作目录，旧目录由使用者决定何时清理。例如规则片段：`"cwd": "~/work", "workspace": "run"`。此模式需同步升级接单程序，事件不能指定它。
+
 每条规则回答五个问题：什么事件（`when`），交给谁（`to`），在哪（`cwd`），照什么做（`skill`、`prompt`），要不要告诉用户（`tell`，默认只在有卡片时）。
 
 ```json

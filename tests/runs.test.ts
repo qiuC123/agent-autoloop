@@ -83,6 +83,7 @@ test("queued work takes the current agent and folder together; a held claim keep
   const next = structuredClone(before);
   next.rules[0].to = "a2";
   next.rules[0].cwd = "/new-project";
+  next.rules[0].workspace = "run";
   ingest("app", note(1), at(0));
   try {
     hub.execute("rules", [next], at(1));
@@ -91,6 +92,7 @@ test("queued work takes the current agent and folder together; a held claim keep
     assert.ok(first);
     assert.equal(first.agent.id, "a2");
     assert.equal(first.rule.cwd, "/new-project");
+    assert.equal(first.rule.workspace, "run");
     const later = structuredClone(next);
     later.rules[0].cwd = "/another-project";
     later.agents.a2.worker = "w3";

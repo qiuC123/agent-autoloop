@@ -46,13 +46,13 @@ const DEFAULTS: Partial<Record<Table, Row>> = {
   runs: {
     attempts: 0,
     ...nulls("claim", "issued", "last_issued", "last_result", "last_answer", "cancel_at", "resume", "session", "link"),
-    ...nulls("claimed_at", "seen_at", "finished_at", "summary", "error", "usage"),
+    ...nulls("claimed_at", "seen_at", "finished_at", "summary", "error", "usage", "workspace_run"),
   },
   cards: {
     ...CARD_BASICS,
     ...nulls("choice", "answer", "by", "result", "rule"),
     lane: "",
-    ...nulls("grp", "source", "agent", "session", "run_id", "answer_event"),
+    ...nulls("grp", "source", "agent", "session", "workspace_run", "run_id", "answer_event"),
     version: 1,
     content_version: 1,
     ...nulls("decided_at", "closed_at"),
@@ -105,7 +105,7 @@ function assignQueued(draft: Draft, run: Row) {
   const config = draft.view.get("config", "rules")!;
   const rule = (config.value as Rules).rules.find((rule) => rule.name === run.rule);
   if (!rule) return;
-  const session = rule.to === run.agent ? {} : nulls("session", "resume");
+  const session = rule.to === run.agent ? {} : nulls("session", "resume", "workspace_run");
   put(draft, "runs", run.id, { agent: rule.to, rules_version: config.version, ...session });
 }
 const threadOf = (run: Row) => ({ rule: run.rule, lane: run.lane, grp: run.grp });
@@ -165,7 +165,14 @@ const notify = (draft: Draft, key: string, title: string, text: string, extra: R
   createCard(draft, { key, kind: "notice", title, text, ...extra });
 
 /** A queued run of this rule and subject takes the event, so what comes in while it waits is handled together. */
-function enqueue(draft: Draft, rule: Rule, event: number, subject: string, resume?: string | null) {
+function enqueue(
+  draft: Draft,
+  rule: Rule,
+  event: number,
+  subject: string,
+  resume?: string | null,
+  workspaceRun?: number | null,
+) {
   const lane = rule.parallel ? subject : "";
   const rulesVersion = draft.view.get("config", "rules")!.version;
   const stamps = { not_before: draft.at, created_at: draft.at, rules_version: rulesVersion };
@@ -175,6 +182,7 @@ function enqueue(draft: Draft, rule: Rule, event: number, subject: string, resum
     add(draft, "runs", { rule: rule.name, agent: rule.to, grp: rule.group, lane, state: "queued", ...stamps });
   put(draft, "run_events", `${run.id}:${event}`, { run_id: run.id, event_id: event });
   if (resume) put(draft, "runs", run.id, { resume });
+  if (workspaceRun) put(draft, "runs", run.id, { workspace_run: workspaceRun });
 }
 
 /** Keeps an event under a key of its own: one the hub makes up mustn't collide with one a source sent. */
@@ -226,7 +234,13 @@ function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
   const name = card.key ?? digest(`${card.title}\n${card.text}`).slice(0, 32);
   const session = draft.view.get("runs", run.id)!.session;
   const quiet = kind === "notice" && ruleNamed(draft, run.rule)?.tell === "never";
-  const origin = { source: sourceOf(draft.view, run.id), agent: run.agent, session, run: run.id };
+  const origin = {
+    source: sourceOf(draft.view, run.id),
+    agent: run.agent,
+    session,
+    workspace_run: run.workspace_run ?? run.id,
+    run: run.id,
+  };
   const key = `thread:${run.rule}:${run.lane}:${name}`;
   createCard(draft, { ...card, hops: hopsOf(draft, run), key, kind, quiet, ...threadOf(run), ...origin }, true);
 }
@@ -305,7 +319,11 @@ function retryLater(draft: Draft, run: Row, result: Result) {
       set(draft, "run_events", `${other.id}:${link.event_id}`, null);
     }
     set(draft, "runs", other.id, null);
-    if (other.resume) put(draft, "runs", id, { resume: other.resume });
+    if (other.resume || other.workspace_run)
+      put(draft, "runs", id, {
+        ...(other.resume && { resume: other.resume }),
+        workspace_run: other.workspace_run ?? other.id,
+      });
   }
   const rejected: Rejected[] = [];
   for (const what of ["ask", "resolve", "later", "events"] as const) {
@@ -332,7 +350,14 @@ function scheduleReview(draft: Draft, run: Row, later: Later) {
     return;
   }
   const session = draft.view.get("runs", run.id)!.session;
-  const fields = { at: iso(Date.parse(later.at!)), about: later.about, session, hops: hopsOf(draft, run) };
+  const fields = {
+    at: iso(Date.parse(later.at!)),
+    about: later.about,
+    agent: run.agent,
+    session,
+    workspace_run: run.workspace_run ?? run.id,
+    hops: hopsOf(draft, run),
+  };
   if (existing) return void put(draft, "timers", existing.id, fields);
   const source = sourceOf(draft.view, run.id) ?? SCHEDULE;
   add(draft, "timers", { ...fields, rule, lane, key: later.key, source, event_id: null, created_at: draft.at });
@@ -442,7 +467,15 @@ function answer(draft: Draft, id: number, given: Row) {
   const eventId = recordEvent(draft, card.source ?? SCHEDULE, event, rule ? [rule.name] : []);
   const decision = { choice: given.choice ?? null, answer: text, by: given.by ?? null, decided_at: draft.at };
   put(draft, "cards", id, { state: "decided", ...decision, answer_event: eventId, version: card.version + 1 });
-  if (rule) enqueue(draft, rule, eventId, card.lane, card.agent === rule.to ? card.session : null);
+  if (rule)
+    enqueue(
+      draft,
+      rule,
+      eventId,
+      card.lane,
+      card.agent === rule.to ? card.session : null,
+      card.agent === rule.to ? (card.workspace_run ?? card.run_id) : null,
+    );
   return { changed: true, state: "decided" };
 }
 
@@ -495,7 +528,16 @@ function tick(draft: Draft) {
     const event = { id: `timer:${timer.id}`, type: "timer.due", subject: timer.lane, hops: timer.hops ?? 0 };
     const eventId = recordEvent(draft, timer.source, event, rule ? [rule.name] : []);
     put(draft, "timers", timer.id, { event_id: eventId });
-    if (rule) enqueue(draft, rule, eventId, timer.lane, timer.session);
+    if (rule)
+      enqueue(
+        draft,
+        rule,
+        eventId,
+        timer.lane,
+        // Timers saved before agents were recorded keep their old session behavior.
+        timer.agent == null || timer.agent === rule.to ? timer.session : null,
+        timer.agent === rule.to ? timer.workspace_run : null,
+      );
   }
   sweep(draft);
 }

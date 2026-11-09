@@ -82,6 +82,25 @@ Rule field `ask` is an optional boolean: `false` rejects each receipt question w
 
 工作目录接受 Unix 绝对路径、`~/`，以及 Windows 盘符绝对路径（`C:/work`、`C:\work`）、UNC（`\\server\share\work`）和 `~\`；拒绝 `C:work`、`\work` 等含糊的相对路径。HTTP 字段不变，目录仍由可信规则指定。
 
+规则可选写 `"workspace": "run"`（只接受 `"run"`）：把 `cwd` 当作已存在的根目录，接单程序自动创建 `<cwd>/run-<工作区所属 run id>` 并在那里启动 Agent；`~` 照旧展开。同一件事的续跑（重试、回答、定时器）和回执修复都在同一个文件夹，新的任务分开。不写时仍直接在 `cwd` 运行。代理环境变量 `AGENT_AUTOLOOP_WORKSPACE` 始终是实际工作目录。
+
+工作区 id 是 run 的 `workspace_run`，没有就用自己的 id。发卡片或设置定时器时，与 session 一起记录工作区 id 和 Agent；回答或到期创建新 run 时，仅同一个 Agent 继承工作区与会话，多次续跑一直沿用第一轮的文件夹。未上报 session 也继承工作区。事件并入排队 run 时保留继承信息；失败合并排队 run 时，带回其 resume 和工作区。换 Agent 时清除继承，规则修改 `cwd` 时采用新根目录；事项和 run 的生命周期不变。
+
+投影格式指纹随查询列定义变化，升级从原事实日志重建，不改写历史事实。旧 run 缺少工作区字段时使用自己的 id；旧卡片可用 `run_id` 找到发卡目录；旧定时器没有 Agent 和工作区记录：照旧续接原会话，工作目录用续跑 run 自己的 id。
+
+目录不会自动清理，保留策略由使用者决定。例如：
+
+```json
+{
+  "name": "整理资料",
+  "when": { "cron": "0 9 * * *" },
+  "to": "codex",
+  "cwd": "~/work",
+  "workspace": "run",
+  "prompt": "整理本轮资料，在当前工作目录保存结果。"
+}
+```
+
 ## 来源：把世界变成事件
 
 ```
@@ -141,6 +160,8 @@ GET /v1/work?claim=<这次领活的编号>&wait=50&running=7,8&capacity=1    Aut
   }
 }
 ```
+
+`Job.rule.workspace` 是可选的 `"run"`，由可信规则传给接单程序；仅此模式附带 `Job.workspaceRun`，表示工作区所属 run id。未设置模式时省略两个字段，旧规则的 Job JSON 不变。接单程序使用 `workspaceRun` 拼目录，旧 Job 缺少该字段时回退到 `run`。该模式要求接单程序同步升级，旧接单程序可能忽略新字段或不能沿用工作区。事件不能指定 `workspace`、`workspaceRun` 或目录。run id 和工作区 id 在拼路径前必须是正整数，生成目录的父路径必须等于根目录的绝对路径；根目录符号链接和 junction 沿用原有文件系统解析，不另加限制。
 
 `Job.rule.ask` 是可选布尔值，供接单程序按领取时的规则生成提示；不写时保持旧提示原文。新增字段不改变缺省规则的 Job JSON，旧接单程序即使仍提示提问，内核也会拒绝禁用规则的 `ask`。
 

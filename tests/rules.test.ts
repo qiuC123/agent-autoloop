@@ -7,7 +7,7 @@
 // there; a scheduled task shown on the page naming a source or agent that isn't there or a malformed schedule; a time zone
 // that doesn't exist; the reserved source redefined; a null rule crashes reload instead of keeping the old rules.
 // A good file changing on disk takes effect; a bad one doesn't, and says why.
-// Non-boolean ask permissions must not silently enable questions.
+// Non-boolean ask permissions must not silently enable questions; invalid workspace modes must not share a folder.
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +31,18 @@ const problem = (change: (r: any) => void, words: RegExp) => {
     },
   );
 };
+
+test("workspace is optional and accepts only run", () => {
+  assert.equal(parseRules(JSON.stringify(good())).rules[0].workspace, undefined);
+  const r = good();
+  r.rules[0].workspace = "run";
+  assert.equal(parseRules(JSON.stringify(r)).rules[0].workspace, "run");
+  for (const workspace of [null, false, 1, "", "thread", [], {}]) {
+    problem((r) => {
+      r.rules[0].workspace = workspace;
+    }, /规则「意见」的 workspace 只能是 run/);
+  }
+});
 
 test("ask is optional and accepts only booleans", () => {
   assert.equal(parseRules(JSON.stringify(good())).rules[0].ask, undefined);

@@ -33,6 +33,7 @@ test("a bad event is refused and nothing is kept", () => {
     { type: "x.y" },
     { id: "1" },
     { ...good, oops: 1 },
+    { ...good, workspace: "run" },
     { ...good, type: "Bad Type" },
     { ...good, id: "x".repeat(201) },
     { ...good, summary: "x".repeat(201) },

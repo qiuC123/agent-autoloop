@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -87,7 +88,7 @@ function save(entry: Entry) {
 }
 
 /** What the agent's environment gets: never the hub's secrets, and nothing of a session the worker itself may be in. */
-function agentEnvironment(entry: Entry) {
+function agentEnvironment(entry: Entry, cwd: string) {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (/^(AGENT_AUTOLOOP_|CLAUDECODE$|CLAUDE_CODE_|CODEX_(?!HOME$))/.test(name)) continue;
@@ -97,6 +98,7 @@ function agentEnvironment(entry: Entry) {
     ...env,
     AGENT_AUTOLOOP_HOME: HOME,
     AGENT_AUTOLOOP_RUN: String(entry.run),
+    AGENT_AUTOLOOP_WORKSPACE: cwd,
     AGENT_AUTOLOOP_CONTEXT: path.join(entry.folder ?? entry.dir, "context.json"),
   };
 }
@@ -212,7 +214,17 @@ export function createWorker({
     if (process.platform === "win32") entry.windowsJob = `Local\\agent-autoloop-${randomUUID()}`;
     save(entry);
     const { rule, agent } = entry.job;
-    const cwd = rule.cwd.replace(process.platform === "win32" ? /^~(?=[/\\])/ : /^~(?=\/)/, homedir());
+    let cwd = rule.cwd.replace(process.platform === "win32" ? /^~(?=[/\\])/ : /^~(?=\/)/, homedir());
+    if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
+    if (rule.workspace === "run") {
+      if (!Number.isSafeInteger(entry.run) || entry.run <= 0) throw new Error("run id 要是正整数");
+      const workspaceRun = entry.job.workspaceRun ?? entry.run;
+      if (!Number.isSafeInteger(workspaceRun) || workspaceRun <= 0) throw new Error("workspace run id 要是正整数");
+      const root = path.resolve(cwd);
+      cwd = path.join(root, `run-${workspaceRun}`);
+      if (path.dirname(cwd) !== root) throw new Error("工作目录不能超出根目录");
+      mkdirSync(cwd, { recursive: true });
+    }
     const turn: Turn = {
       prompt,
       session: entry.session,
@@ -225,8 +237,7 @@ export function createWorker({
       contextFile: path.join(entry.folder ?? entry.dir, "context.json"),
       folder: entry.folder ?? entry.dir,
     };
-    if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
-    const env = agentEnvironment(entry);
+    const env = agentEnvironment(entry, cwd);
     adapter.prepare?.(turn, env);
     const argv = adapter.command(turn);
     const { out, err, exit } = files(entry);

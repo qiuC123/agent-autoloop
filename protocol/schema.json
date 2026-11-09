@@ -415,6 +415,10 @@
     "job": {
       "type": "object",
       "properties": {
+        "workspaceRun": {
+          "type": "integer",
+          "minimum": 1
+        },
         "run": {
           "type": "integer",
           "minimum": 1
@@ -433,6 +437,9 @@
             },
             "cwd": {
               "type": "string"
+            },
+            "workspace": {
+              "enum": ["run"]
             },
             "skill": {
               "type": "string"

@@ -534,7 +534,8 @@ function tick(draft: Draft) {
         rule,
         eventId,
         timer.lane,
-        timer.agent === rule.to ? timer.session : null,
+        // Timers saved before agents were recorded keep their old session behavior.
+        timer.agent == null || timer.agent === rule.to ? timer.session : null,
         timer.agent === rule.to ? timer.workspace_run : null,
       );
   }

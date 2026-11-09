@@ -148,7 +148,8 @@ for (const kind of ["ask", "later"] as const) {
         .filter((c) => c.table === "runs")
         .at(-1)!.row!;
       assert.equal(run.workspace_run ?? run.id, kind === "ask" ? first.run : run.id);
-      assert.equal(run.resume, kind === "ask" ? "legacy-session" : null);
+      // Legacy timers have no recorded agent, so they keep the session they always resumed.
+      assert.equal(run.resume, "legacy-session");
     }
     assert.deepEqual(db.prepare("SELECT fact FROM facts ORDER BY seq").all(), saved);
   });

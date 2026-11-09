@@ -86,7 +86,7 @@ Rule field `ask` is an optional boolean: `false` rejects each receipt question w
 
 工作区 id 是 run 的 `workspace_run`，没有就用自己的 id。发卡片或设置定时器时，与 session 一起记录工作区 id 和 Agent；回答或到期创建新 run 时，仅同一个 Agent 继承工作区与会话，多次续跑一直沿用第一轮的文件夹。未上报 session 也继承工作区。事件并入排队 run 时保留继承信息；失败合并排队 run 时，带回其 resume 和工作区。换 Agent 时清除继承，规则修改 `cwd` 时采用新根目录；事项和 run 的生命周期不变。
 
-投影格式指纹随查询列定义变化，升级从原事实日志重建，不改写历史事实。旧 run 缺少工作区字段时使用自己的 id；旧卡片可用 `run_id` 找到发卡目录；旧定时器没有 Agent 和工作区记录，无法可靠续接，按新任务启动，不带旧会话。
+投影格式指纹随查询列定义变化，升级从原事实日志重建，不改写历史事实。旧 run 缺少工作区字段时使用自己的 id；旧卡片可用 `run_id` 找到发卡目录；旧定时器没有 Agent 和工作区记录：照旧续接原会话，工作目录用续跑 run 自己的 id。
 
 目录不会自动清理，保留策略由使用者决定。例如：
 

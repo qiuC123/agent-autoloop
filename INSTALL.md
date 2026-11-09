@@ -140,4 +140,4 @@ agent-autoloop uninstall
 
 Windows Codex 插件按当前权限模式和登录环境运行 `codex sandbox`，取得实际用户 SID 后，只授权本轮的 `agent/` 资料目录：`read` 只读，默认 `edit` 可读写。父目录里的 worker 轮次凭据、退出标记及启动参数不共享；`hub.db`、`master.key`、`secrets.env`、`config.json` 仍只由当前用户读取。不会修改沙箱配置或自动改用 `full`。
 
-规则可设 `"workspace": "run"`，让已存在的 `cwd` 作为独立运行目录的根；使用前须同步更新中台和接单程序，旧接单程序不保证落实新字段。详见 [规则协议](docs/protocol.md#规则)。
+规则可设 `"workspace": "run"`，让已存在的 `cwd` 作为独立任务目录的根；同 Agent 的重试、回答和定时器续跑复用原文件夹。使用前须同步更新中台和接单程序，旧接单程序不保证落实工作区继承。详见 [规则协议](docs/protocol.md#规则)。

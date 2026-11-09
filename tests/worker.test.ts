@@ -14,7 +14,7 @@
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
 // A private-file/ACL failure must report failed, retain an unacknowledged result, and never launch unprotected work.
-// Run workspaces must be created under an existing root, isolated by run and reused across turns and attempts.
+// Run workspaces must be created under an existing root, isolated by task and reused across turns and attempts.
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
@@ -303,9 +303,12 @@ test("run workspaces isolate runs and preserve files across attempts", async () 
   hub.jobs.push({ ...given, attempt: 2, session: "previous" });
   await until(w, () => hub.results.length === 2);
   assert.equal(readFileSync(join(target, "visits"), "utf8"), "xx");
+  hub.jobs.push({ ...given, run: nextRun++, workspaceRun: given.run });
+  await until(w, () => hub.results.length === 3);
+  assert.equal(readFileSync(join(target, "visits"), "utf8"), "xxx");
   const other = { ...given, run: nextRun++ };
   hub.jobs.push(other);
-  await until(w, () => hub.results.length === 3);
+  await until(w, () => hub.results.length === 4);
   assert.equal(readFileSync(join(folder, `run-${other.run}`, "visits"), "utf8"), "x");
   assert.ok(hub.results.every((r) => r.outcome === "done"));
 });
@@ -317,8 +320,11 @@ test("run workspaces reject invalid ids and do not create a missing root", async
   for (const run of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "12"]) {
     hub.jobs.push({ ...job(), run, rule: { name: "invalid", cwd: folder, workspace: "run" } });
   }
+  for (const workspaceRun of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "../escape"]) {
+    hub.jobs.push({ ...job(), workspaceRun, rule: { name: "invalid", cwd: folder, workspace: "run" } });
+  }
   const w = worker(hub);
-  await until(w, () => hub.results.length === 6);
+  await until(w, () => hub.results.length === 11);
   assert.match(hub.results[0].error, /这个目录不存在/);
   assert.equal(existsSync(missing), false);
   for (const result of hub.results.slice(1)) assert.match(result.error, /run id/);

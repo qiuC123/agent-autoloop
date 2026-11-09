@@ -89,6 +89,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
   const timerView = (timer: Row) => ({ key: timer.key, about: timer.about, at: timer.at });
   return {
     run: run.id,
+    ...(workspace === "run" && { workspaceRun: run.workspace_run ?? run.id }),
     token: credential(env, "run", run.id, run.issued),
     attempt: run.attempts + 1,
     rule: {

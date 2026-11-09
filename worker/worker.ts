@@ -218,8 +218,10 @@ export function createWorker({
     if (!existsSync(cwd)) throw new Error(`在 ${cwd} 启动不了：这个目录不存在`);
     if (rule.workspace === "run") {
       if (!Number.isSafeInteger(entry.run) || entry.run <= 0) throw new Error("run id 要是正整数");
+      const workspaceRun = entry.job.workspaceRun ?? entry.run;
+      if (!Number.isSafeInteger(workspaceRun) || workspaceRun <= 0) throw new Error("workspace run id 要是正整数");
       const root = path.resolve(cwd);
-      cwd = path.join(root, `run-${entry.run}`);
+      cwd = path.join(root, `run-${workspaceRun}`);
       if (path.dirname(cwd) !== root) throw new Error("工作目录不能超出根目录");
       mkdirSync(cwd, { recursive: true });
     }

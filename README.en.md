@@ -112,9 +112,9 @@ Changes take effect within seconds of saving. Run `agent-autoloop check` to vali
 
 Set `"ask": false` on a rule to forbid question cards: the engine rejects each receipt `ask` while applying other fields normally. Explain owner decisions with `notice` or emit an event permitted by the rule. Omitting `ask` or setting it to `true` preserves existing behavior; existing cards and answers are unchanged.
 
-Set the optional rule field `"workspace": "run"` (the only accepted value) to use an existing `cwd` as the root. The worker creates `<cwd>/run-<run id>` and starts the agent there; `~` expands as before. Receipt repairs and failed attempts of the same run reuse that directory; different runs use different directories. Without this field, agents still run directly in `cwd`. The agent environment variable `AGENT_AUTOLOOP_WORKSPACE` always contains the actual working directory.
+Set the optional rule field `"workspace": "run"` (the only accepted value) to use an existing `cwd` as the root. The worker creates `<cwd>/run-<workspace owner run id>` and starts the agent there; `~` expands as before. Follow-ups for the same task (retries, answers and timers) and receipt repairs reuse the same folder; new tasks get separate folders. Without this field, agents still run directly in `cwd`. The agent environment variable `AGENT_AUTOLOOP_WORKSPACE` always contains the actual working directory.
 
-Answering a card creates a new run under the existing protocol, so it uses a new directory. The previous session is still passed along, but Claude may not resume it because it looks up sessions by working directory. This field does not change thread or run lifecycles.
+Answers and timers still create new runs. The same agent inherits the workspace and session, keeping the first run's folder through repeated follow-ups. Changing agents clears that inheritance; changing the rule's `cwd` selects the new root. This field does not change thread or run lifecycles.
 
 Workspaces are never cleaned up automatically; users choose their own retention policy. For example:
 

@@ -1,6 +1,7 @@
 import type { Rule } from "../kernel/rules.ts";
 export type Job = {
   run: number;
+  workspaceRun?: number;
   token: string;
   attempt: number;
   rule: Pick<Rule, "name" | "cwd" | "workspace" | "skill" | "prompt" | "ask" | "emits">;

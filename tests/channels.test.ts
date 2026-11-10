@@ -6,6 +6,8 @@
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
 // Text submits must use form_value; stale answers must notify at the original message without patching the card.
 // FYIs must render only information, without any callback, form or acknowledgement button.
+// Short choices must stay compact without losing recommendation or callback values; long choices must still wrap.
+// The required text field and submit must share a row without a separate label.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -43,10 +45,23 @@ const base: Card = {
 
 test("a card shows its options while it's open, and what became of it after", () => {
   const open = render(base);
-  const blocks = open.body.elements.filter((e) => e.tag === "interactive_container") as any[];
-  assert.equal(blocks.length, 2);
-  assert.deepEqual(blocks[1].behaviors[0].value, { card: 5, choice: 1, version: 1 });
-  assert.equal(blocks[1].border_color, "blue", "what's recommended stands out");
+  const rows = open.body.elements.filter((e) => e.tag === "column_set") as any[];
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].flex_mode, "none");
+  assert.equal(rows[0].columns.length, 2);
+  rows[0].columns.forEach((column: any, index: number) => {
+    assert.equal(column.tag, "column");
+    assert.equal(column.width, "weighted");
+    assert.equal(column.weight, 1);
+    assert.equal(column.vertical_align, "center");
+    assert.equal(column.elements.length, 1);
+    const button = column.elements[0];
+    assert.equal(button.tag, "button");
+    assert.deepEqual(button.text, { tag: "plain_text", content: base.options[index] });
+    assert.equal(button.width, "fill");
+    assert.equal(button.type, index === base.recommend ? "primary" : "default");
+    assert.deepEqual(button.behaviors, [{ type: "callback", value: { card: 5, choice: index, version: 1 } }]);
+  });
   const said = (card: Card) => JSON.stringify(render(card).body.elements);
   assert.match(said({ ...base, state: "decided", choice: 1 }), /你选了「留着」，已记录/);
   assert.ok(!said({ ...base, state: "decided", choice: 1 }).includes("callback"));
@@ -54,6 +69,46 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.match(said({ ...base, state: "decided", answer: "归档" }), /你选了「归档」/);
   assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
+});
+
+test("short choices wrap after three columns and default to the first recommendation", () => {
+  for (const count of [3, 4, 6, 7, 8]) {
+    const options = Array.from({ length: count }, (_, i) => `选${i}`);
+    const rows = render({ ...base, options, recommend: null }).body.elements.filter(
+      (e) => e.tag === "column_set",
+    ) as any[];
+    assert.equal(rows.length, Math.ceil(count / 3));
+    rows.forEach((row, index) => {
+      assert.equal(row.flex_mode, "none");
+      assert.equal(row.columns.length, Math.min(3, count - index * 3));
+    });
+    const buttons = rows.flatMap((row) => row.columns.map((column: any) => column.elements[0]));
+    assert.deepEqual(
+      buttons.map((button) => button.text.content),
+      options,
+    );
+    buttons.forEach((button, index) => {
+      assert.equal(button.type, index === 0 ? "primary" : "default");
+      assert.deepEqual(button.behaviors, [{ type: "callback", value: { card: 5, choice: index, version: 1 } }]);
+    });
+  }
+});
+
+test("choice length counts code points and long choices keep full-width bordered blocks", () => {
+  const short = render({ ...base, options: ["😀".repeat(8)] });
+  assert.ok(short.body.elements.some((e) => e.tag === "column_set"));
+  const options = ["删", "😀".repeat(9)];
+  const shown = render({ ...base, options });
+  const blocks = shown.body.elements.filter((e) => e.tag === "interactive_container") as any[];
+  assert.equal(blocks.length, 2);
+  assert.ok(!shown.body.elements.some((e) => e.tag === "column_set"));
+  blocks.forEach((block, index) => {
+    assert.equal(block.width, "fill");
+    assert.equal(block.has_border, true);
+    assert.equal(block.border_color, index === base.recommend ? "blue" : "grey");
+    assert.equal(block.elements[0].text.content, options[index]);
+    assert.deepEqual(block.behaviors, [{ type: "callback", value: { card: 5, choice: index, version: 1 } }]);
+  });
 });
 
 test("FYIs render as text without any interaction, including content updates", () => {
@@ -65,19 +120,35 @@ test("FYIs render as text without any interaction, including content updates", (
   }
 });
 
-test("open questions have a named form with a versioned submit and an optional plain-text input label", () => {
+test("open questions have a compact named form with a versioned submit and an unlabelled required input", () => {
   for (const input of [null, '返工意见"<>']) {
     const card = render({ ...base, version: 3, input });
     const form = card.body.elements.find((e) => e.tag === "form") as any;
     assert.ok(form);
     assert.equal(form.name, "answer_form");
-    const field = form.elements.find((e: any) => e.tag === "input");
+    assert.equal(form.elements.length, 1);
+    const row = form.elements[0];
+    assert.equal(row.tag, "column_set");
+    assert.equal(row.flex_mode, "none");
+    assert.equal(row.columns.length, 2);
+    assert.deepEqual(
+      row.columns.map((column: any) => column.width),
+      ["weighted", "weighted"],
+    );
+    assert.deepEqual(
+      row.columns.map((column: any) => column.weight),
+      [4, 1],
+    );
+    assert.equal(row.columns[1].vertical_align, "center");
+    const field = row.columns[0].elements.find((e: any) => e.tag === "input");
     assert.equal(field.name, "answer_text");
     assert.equal(field.required, true);
-    assert.deepEqual(field.label, { tag: "plain_text", content: input ?? "别的想法" });
-    assert.deepEqual(field.placeholder, field.label);
-    const submit = form.elements.find((e: any) => e.tag === "button");
+    assert.ok(!Object.hasOwn(field, "label"));
+    assert.deepEqual(field.placeholder, { tag: "plain_text", content: input ?? "别的想法" });
+    const submit = row.columns[1].elements.find((e: any) => e.tag === "button");
     assert.equal(submit.name, "answer_submit");
+    assert.equal(submit.width, "fill");
+    assert.deepEqual(submit.text, { tag: "plain_text", content: "发送" });
     assert.equal(submit.form_action_type, "submit");
     assert.deepEqual(submit.behaviors, [{ type: "callback", value: { card: 5, text: true, version: 3 } }]);
   }

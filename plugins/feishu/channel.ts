@@ -20,7 +20,7 @@ function outcomeOf(card: Card) {
 /** One card, as it looks now: the options while it's open, what became of it after. */
 export function render(card: Card) {
   const outcome = outcomeOf(card);
-  // Each option is a block across the card, its words wrapping: buttons in a row, one line high, cut long options off.
+  // Long options need full-width blocks because buttons cut off text instead of wrapping.
   const option = (label: string, index: number) => ({
     tag: "interactive_container",
     width: "fill",
@@ -31,19 +31,70 @@ export function render(card: Card) {
     behaviors: [{ type: "callback", value: { card: card.id, choice: index, version: card.version } }],
     elements: [{ tag: "div", text: { tag: "plain_text", content: label } }],
   });
+  const compact = card.kind === "ask" && card.options.every((label) => [...label].length <= 8);
+  const choices = compact
+    ? Array.from({ length: Math.ceil(card.options.length / 3) }, (_, row) => ({
+        tag: "column_set",
+        flex_mode: "none",
+        columns: card.options.slice(row * 3, row * 3 + 3).map((label, column) => {
+          const index = row * 3 + column;
+          return {
+            tag: "column",
+            width: "weighted",
+            weight: 1,
+            vertical_align: "center",
+            elements: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: label },
+                width: "fill",
+                type: index === (card.recommend ?? 0) ? "primary" : "default",
+                behaviors: [{ type: "callback", value: { card: card.id, choice: index, version: card.version } }],
+              },
+            ],
+          };
+        }),
+      }))
+    : card.options.map(option);
   const afterwards = outcome ? [{ tag: "markdown", content: `**${outcome}**` }] : [];
-  const label = { tag: "plain_text", content: card.input ?? "别的想法" };
   const form = {
     tag: "form",
     name: "answer_form",
     elements: [
-      { tag: "input", name: "answer_text", label, placeholder: label, required: true },
       {
-        tag: "button",
-        name: "answer_submit",
-        text: { tag: "plain_text", content: "发送" },
-        form_action_type: "submit",
-        behaviors: [{ type: "callback", value: { card: card.id, text: true, version: card.version } }],
+        tag: "column_set",
+        flex_mode: "none",
+        columns: [
+          {
+            tag: "column",
+            width: "weighted",
+            weight: 4,
+            elements: [
+              {
+                tag: "input",
+                name: "answer_text",
+                placeholder: { tag: "plain_text", content: card.input ?? "别的想法" },
+                required: true,
+              },
+            ],
+          },
+          {
+            tag: "column",
+            width: "weighted",
+            weight: 1,
+            vertical_align: "center",
+            elements: [
+              {
+                tag: "button",
+                name: "answer_submit",
+                text: { tag: "plain_text", content: "发送" },
+                width: "fill",
+                form_action_type: "submit",
+                behaviors: [{ type: "callback", value: { card: card.id, text: true, version: card.version } }],
+              },
+            ],
+          },
+        ],
       },
     ],
   };
@@ -57,7 +108,7 @@ export function render(card: Card) {
     body: {
       elements: [
         ...(card.text ? [{ tag: "markdown", content: card.text }] : []),
-        ...(card.state === "open" ? card.options.map(option) : afterwards),
+        ...(card.state === "open" ? choices : afterwards),
         ...(card.state === "open" && card.kind === "ask" ? [form] : []),
       ],
     },

@@ -136,7 +136,7 @@ text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK S
 
 <rect class="plug" x="390" y="452" width="548" height="92" rx="14"/>
 <text x="410" y="480" class="h2">通道插件</text>
-<text x="490" y="480" class="s">原地更新 · 只告知无按钮、不留待办</text>
+<text x="490" y="480" class="s">原地更新 · 可续用同卡 · 只告知无按钮</text>
 <rect class="item" x="410" y="494" width="114" height="36" rx="8"/>
 <text x="467" y="517" class="r" text-anchor="middle">桌面通知</text>
 <rect class="item" x="534" y="494" width="104" height="36" rx="8"/>

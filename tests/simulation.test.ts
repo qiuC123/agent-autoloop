@@ -13,7 +13,20 @@ import { invariants } from "../sim/invariants.ts";
 test("200000 deterministic fault steps preserve safety and recovered work terminates", () => {
   const result = simulate(0x5eed, 200000);
   assert.equal(result.steps, 200000);
-  for (const fault of ["lost", "duplicate", "restart", "offline", "channel", "clock", "update", "staleAnswer", "fyi"])
+  for (const fault of [
+    "lost",
+    "duplicate",
+    "restart",
+    "offline",
+    "channel",
+    "clock",
+    "update",
+    "staleAnswer",
+    "fyi",
+    "continue",
+    "reopen",
+    "changeKind",
+  ])
     assert.ok(result.faults[fault] > 0, fault);
   assert.ok(result.completed > 0);
   console.log(JSON.stringify(result));

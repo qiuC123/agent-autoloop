@@ -74,9 +74,9 @@ Windows 计划任务在登录时启动 runner，另用 `TimeTrigger` 每 5 分�
 
 `elsewhere` 是在别处定时跑的任务：中台不启动它们，只在 `agent-autoloop status` 里列出来，它们要找你时用 `POST /v1/tell`。规则写错了，文件改动不生效，旧规则继续跑，并推一张卡片告诉你错在哪。
 
-规则可写 `"ask": false` 禁止新建提问卡片；只接受布尔值，不写或 `true` 保持原行为。回执中每个 `ask` 都会被拒绝并记入 `rejected`（`what: "ask"`），`notice`、`events`、`resolve`、`later` 照常处理。需要本人决定的事用 `notice` 说明或按规则交出事件。此开关不关闭旧卡片，也不清除已有回答或会话。
+规则可写 `"ask": false` 禁止回执提问（包括 `continue: true` 续用旧卡）；只接受布尔值，不写或 `true` 保持原行为。回执中每个 `ask` 都会被拒绝并记入 `rejected`（`what: "ask"`），`notice`、`events`、`resolve`、`later` 照常处理。需要本人决定的事用 `notice` 说明或按规则交出事件。此开关不关闭旧卡片，也不清除已有回答或会话。
 
-Rule field `ask` is an optional boolean: `false` rejects each receipt question without creating a card; omitted or `true` preserves existing behavior. Other receipt fields still apply. Existing cards, answers and sessions are unchanged.
+Rule field `ask` is an optional boolean: `false` rejects each receipt question, including `continue: true`, without creating or updating a card; omitted or `true` preserves existing behavior. Other receipt fields still apply. Existing cards, answers and sessions are unchanged.
 
 排队和等待重试的任务在领取时一起采用最新的 Agent、目录、提示词和权限；换了 Agent 就不带旧 Agent 的会话。已经领取的任务保留领取时的 Job 配置和接单程序，重复 claim、心跳、停止和重启恢复都不随规则更新换人。事件已经归属的事项不重新拆分或合并；回执中的提问许可、事件许可和通知方式仍按提交时的规则核验。
 
@@ -178,8 +178,8 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
   "summary": "一句话", "error": "没跑成的原因", "session": "…",
   "usage": { "input": 0, "output": 0, "cached": 0, "cost": 0 },
   // 下面就是回执，一个事务里一次生效
-  "ask":     [{ "title", "text", "options": ["…", "…"], "recommend": 0, "about": "留给接着干的自己", "key": "这件事的固定名字", "input": "返工意见" }],
-  "notice":  [{ "title", "text", "key", "fyi": true }], // fyi 可选；只告知才写 true，需要本人做事时不写或写 false
+  "ask":     [{ "title", "text", "options": ["…", "…"], "recommend": 0, "about": "留给接着干的自己", "key": "这件事的固定名字", "input": "返工意见", "continue": true }],
+  "notice":  [{ "title", "text", "key", "fyi": true, "continue": true }], // fyi、continue 都可选；continue 表示续用同 key 最新卡
   "resolve": [{ "card": 3, "reason": "在哪核实了已解决" }],
   "later":   [{ "key": "…", "at": "2026-11-05T09:00:00+08:00", "about": "到时候查什么" }, { "key": "…", "cancel": true }],
   "events":  [{ "id", "type", "subject", "summary", "detail", "link" }]
@@ -192,15 +192,22 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
 - 要本人亲自做事才用普通 `notice`（省略 `fyi` 或写 `false`），保留“已处理”按钮。非布尔 `fyi` 会被拒绝。只告知不会自动完成实际业务，也不能当作本人批准。
 - 需要本人恢复连接、登录或身份验证时，用 `done` 结束本轮并交 `ask`，不交 `failed`。`done` 表示本轮结束，未完成的事项由卡片继续跟进，不代表网页已经验收。同一阻塞已有 `open` 卡片时不重复提问，不用 `later` 定时重试；`waiting` 里同一阻塞已有的复查用 `cancel` 取消。保留已完成业务，`about` 写清恢复后只做哪些剩余步骤。
 - `usage` 由接单程序上报本次执行的用量，包含这次执行的回执重写；每一项都可以没有：`input`、`output`、`cached` 是 Token 数，`cost` 是美元。中台把同一轮各次执行的已报数值相加，重复提交不重复计费；没有上报的字段保持缺省，不当成零。`agent-autoloop status` 按完成时间汇总今天和最近 7 天已结束的轮次，没上报的轮数如实写出来。升级不重算旧回执，升级前已经被覆盖的累计值不会自动补回。
-- 回执 `ask` / `notice` 的 `key` 范围是这个事项。同 key、同 kind 的卡片还开着时，`title`、`text`、`options`、`recommend`、`about`、`input` 任一变化就更新原卡：`version` 加一，`content_version` 设为这个新版本。省略可选字段会清除旧值；内容相同不加版本、不重发。不同 kind 仍按重复处理；关闭后再交是新卡；`once` 通知及系统通知的行为不变。
-- 只告知的回执卡片虽然一直是 `closed`，同事项、同 key 仍按内容更新原卡，保留创建时间和各通道的 `ref`，相同内容不重发。它与同 key 的普通通知或提问各自独立：不会关闭旧待办，也不会把告知改成待办。不写 key 时沿用标题和正文的摘要作 key，内容变化会建新卡。沿用报告卡片的 24 小时首发窗口（按创建时间）：未送达通道超过一天不补发，包括后来更新的卡片；已经送达的通道仍能原地更新。没有原地更新能力的通道照旧只报告新版本。
-- 内容更新保留卡片编号、创建时间、回答链接和原提问的事项、会话归属，各通道保留原 `ref`，重新获得发送尝试（包括之前已放弃的通道）。恢复投递后追上最新版本；重试再次耗尽仍会放弃，首次送达前已经关闭的卡片仍不发。
+- 回执 `ask` / `notice` 的 `key` 范围是这个事项。可选布尔字段 `continue` 不写或为 `false` 时，行为不变：同 key、同 kind 的卡片还开着时，`title`、`text`、`options`、`recommend`、`about`、`input` 任一变化就更新原卡：`version` 加一，`content_version` 设为这个新版本。省略可选字段会清除旧值；内容相同不加版本、不重发。不同 kind 仍按重复处理；关闭后再交是新卡；`once` 通知及系统通知的行为不变。
+- 未写 `continue: true` 时，只告知的回执卡片虽然一直是 `closed`，同事项、同 key 仍按内容更新原卡，保留创建时间和各通道的 `ref`，相同内容不重发。它与同 key 的普通通知或提问各自独立：不会关闭旧待办，也不会把告知改成待办。不写 key 时沿用标题和正文的摘要作 key，内容变化会建新卡。沿用报告卡片的 24 小时首发窗口（按创建时间）：未送达通道超过一天不补发，包括后来更新的卡片；已经送达的通道仍能原地更新。没有原地更新能力的通道照旧只报告新版本。
+- `continue: true` 在本事项内找同 key 最新的一张卡，不论 `kind` 或 `open` / `decided` / `done` / `closed` 状态；找不到照常新建。找到后用这次回执完整替换 `kind`、`title`、`text`、`options`、`recommend`、`about`、`input`、`fyi`，省略的字段恢复缺省值；`ask` 和普通 `notice` 为 `open`，`fyi` 为 `closed`。内容或状态改变，`version` 加一、`content_version` 设为新版本；完全相同记为 `duplicate`，不加版本、不重发。只续用最新卡，不合并或关闭更早的同 key 卡。稳定续用应明确写固定 `key`，不写仍按标题和正文摘要匹配。
+- 续用清除卡片当前显示的旧选择、回答者、处理结果与回答/关闭时间；已接受的回答事实及其派发关系不改、不重放。回答投影从原事实保留当时的问题、选项、回答和 `about`，因此已排队但尚未处理的回答不会丢失；`context.answers` 按回答事件读取，`context.decided` 保留历史决定，只对当时那件事有效。同卡多次回答可出现多个历史条目，不能把旧批准当成新版本的批准。处理回答的回执同时续用该卡时，直接形成新版本，不再先把卡片标为 `done` 多加一版。
+- `continue` 仅用于回执 `ask` / `notice`，不能提交到 `/v1/tell`；内部 `once` 去重、系统通知和运行报告不变，`once` 也不是回执字段。续用为 `fyi` 时仍按原创建时间算 24 小时首发窗口，未送达通道超过一天不补发，已送达通道仍可更新；续用为 `open` 后按待办投递，不受这个首发窗口限制。`tell: "never"` 仍不推送通知。`resolve` 的权限与范围不变，先于本回执卡片处理：同回执先结案再续用会得到新回执指定的状态，各自加一版；续用只按本事项匹配 key，不扩大 `resolve` 可结案的范围。`ask: false` 仍拒绝每个 `ask`，包括续用。
+- 内容更新保留卡片编号、创建时间、回答链接和原提问的事项、会话归属，各通道保留原 `ref`，重新获得发送尝试（包括之前已放弃的通道）。恢复投递后追上最新版本；重试再次耗尽仍会放弃，首次送达前已经关闭的非 FYI 卡片仍不发，FYI 按上述首发窗口处理。
 - 回执事实的 `meta.cards` 列出 `{card, action}`，`action` 为 `created`、`updated` 或 `duplicate`；重复提交同一回执不再写事实。严格校验日志的客户端需同步新版 schema，旧事实不要求有 `meta`。
-- 兼容：数据库已保存 `fyi`，无需改表或迁移；旧卡片及旧日志语义不变，旧回执仍建普通通知。`Card.fyi` 是新增布尔输出，旧中台可能省略；通道仍可按 `state` 和 `options` 渲染。使用新回执前需升级中台与接单程序，旧版会拒绝该字段。
+- 兼容：`continue` 只接受布尔值；旧回执、旧卡片及旧日志语义不变，旧回执仍建普通通知。回答历史是可从事实日志逐条重建的投影；格式指纹变化时自动重建，不改写旧事实，不写数据迁移。`Card.fyi` 是新增布尔输出，旧中台可能省略；通道仍可按 `state` 和 `options` 渲染。使用新回执前需升级中台与接单程序，旧版会拒绝该字段。
 - `ask.input` 是可选的文字框标签，1–20 个 Unicode 码点，不能全是空白；不写时显示“别的想法”。卡片页与飞书都把它用作标签和提示，文字提交仍是 `{text}`。
 - `resolve` 只能结同来源、同组、这一轮领活前就有的卡片，越界的写进 `rejected`，不影响这一轮的结果。
 - `later` 的 `key` 范围是这个事项，同一个 `key` 再写一次就是改时间。
 - `events` 的来源由规则的 `emits` 决定，回执改不了。
+
+Receipt `ask` / `notice` accepts an optional boolean `continue`. Omitted or `false` preserves existing behavior. `true` selects the latest same-key card in the same thread across all kinds and states, including `done`; no match creates a card. The receipt replaces all content fields (`kind`, `title`, `text`, `options`, `recommend`, `about`, `input`, `fyi`), clearing omitted values. Questions and ordinary notices become `open`; FYIs become `closed`. Changed content or state increments `version` once and sets `content_version` to it; identical submissions are duplicates. Identity, creation time, thread/session/workspace ownership and channel refs remain, and delivery attempts reset. Earlier same-key cards are not merged. Use an explicit stable key.
+
+Continuation clears the current displayed answer/result, but never edits or replays accepted answer facts. An indexed projection rebuilt from those facts preserves the original question and answer for pending `context.answers` and historical `context.decided`; old approval applies only to that earlier question. When an answer-handling receipt continues its card, it replaces the automatic `done` transition rather than adding an intermediate version. Internal `once`, system notifications and `/v1/tell` remain unchanged; `once` is not a receipt field. FYIs retain the 24-hour first-send window measured from original creation; existing refs can update later, and reopening restores actionable delivery without that window. Notification `tell: "never"` still applies. `resolve` retains its scope and runs before receipt cards, so resolving and continuing together applies both transitions and increments; continuation cannot select another thread. Rule `ask: false` still rejects continued questions. Upgrade both hub and worker before sending the field; no data migration or historical fact rewrite is needed.
 
 以上需要提问的说明只适用于允许 `ask` 的规则；`ask: false` 时改用 `notice` 或规则允许的事件，不能自行执行需要本人决定的事。
 
@@ -251,7 +258,7 @@ export default {
 GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 → 200 { "card": null | Card }
 
-// Card：这张卡片现在的样子。内容和状态都能更新；content_version 只随内容变化
+// Card：这张卡片现在的样子。内容和状态都能更新；content_version 随内容变化或续用改变状态而更新
 { "id": 56, "version": 2, "content_version": 2, "input": "返工意见", "ref": null, "kind": "ask", "state": "open",
   "title": "…", "text": "…", "options": ["…", "…"], "recommend": 0,
   "choice": null, "answer": null, "result": null, "link": null }
@@ -261,9 +268,11 @@ GET /v1/cards/next?wait=50    Authorization: Bearer <通道的密钥>
 - 发完报告：`POST /v1/cards/56/delivered { "version": 2, "ref": "om_xxx" }`。没报告的过一分钟会再给你。**支持幂等键的平台，发新消息只用卡片编号，不带版本**。平台不支持时无法保证去重，Webhook 模板可能在报告丢失后重发。
 - 发不出去：`POST /v1/cards/56/failed { "version": 2, "error": "…" }`。第一次发送隔得越来越久地重试，一小时后放弃（卡片还开着，`agent-autoloop status` 看得到）；通道一直没来领不算在内。
 - 还没送达就已经解决的卡片不再打扰你。
-- 你点了：`POST /v1/cards/56/answer { "choice": 1, "version": 2, "by": "ou_xxx", "ref": "om_xxx" }`。只有第一次算数，`by` 要在这个通道的 `answerers` 里，`ref` 要和送达的那条一致。送达时保存 `version`，回答时原样带回；文字回答用 `text` 替代 `choice`。普通通知有一个“已处理”按钮，点了就结案；`fyi: true` 的只告知卡片始终 `closed`、`options: []`，通道不能添加按钮或文字输入框。
+- 你点了：`POST /v1/cards/56/answer { "choice": 1, "version": 2, "by": "ou_xxx", "ref": "om_xxx" }`。每次开放后只有第一个回答算数，`by` 要在这个通道的 `answerers` 里，`ref` 要和送达的那条一致。送达时保存 `version`，回答时原样带回；文字回答用 `text` 替代 `choice`。普通通知有一个“已处理”按钮，点了就结案；`fyi: true` 的只告知卡片始终 `closed`、`options: []`，通道不能添加按钮或文字输入框。
 
-`answer.version` 可选，提供时必须是正的安全整数。身份与原消息核对通过后，小于当前 `content_version` 就返回 HTTP 409，`error` 为“卡片已更新，请重看”，不记录回答、不唤醒事项；仅状态变化不提高 `content_version`。省略版本保持旧行为，旧通道可逐步升级，但没有防止旧内容误答的保证。卡片页的每个表单都带隐藏 `version`；交互式 `try` 和 MCP 回答也可携带所显示版本。飞书选项与表单提交均携带版本，过期提示回复在原消息下，不因拒答重发整张卡片。
+`answer.version` 可选，提供时必须是正的安全整数。身份与原消息核对通过后，小于当前 `content_version` 就返回 HTTP 409，`error` 为“卡片已更新，请重看”，不记录回答、不唤醒事项；普通回答、结案等状态变化不提高 `content_version`；`continue: true` 重新开放或改变种类/告知状态会提高它，即使文字没变也拒绝旧回答。省略版本保持旧行为，旧通道可逐步升级，但没有防止旧内容误答的保证。卡片页的每个表单都带隐藏 `version`；交互式 `try` 和 MCP 回答也可携带所显示版本。飞书选项与表单提交均携带版本，过期提示回复在原消息下，不因拒答重发整张卡片。
+
+Channels must patch an existing `ref` with the current card, including reopening a previously settled card. Open questions restore options and text input; closed FYIs expose neither. Callbacks carry the displayed version. Ordinary answer/resolve transitions leave `content_version` unchanged, while continuation that changes content or state advances it; stale answers receive HTTP 409 even if the wording is identical.
 
 最小的通道只要十几行：领卡片、发文字和 `link`、报告。`link` 只给配了 `"links": true` 的通道，其他通道这里是 `null`。它打开一个不跑脚本的普通表单页，这张卡片的文字和按钮都在上面，谁拿到链接谁就能答，有效期 7 天，适合只会发文字的群机器人、邮件。能发按钮、能收回调的通道（比如飞书）用按钮，身份由平台核验，更安全。一台电脑上用时 `link` 是本机地址，手机打不开，要手机批请把中台放到有公网地址的机器上，并配好 `publicUrl`。
 
@@ -387,7 +396,7 @@ Node 请求转换层保持在 50 行内；文件、SQLite 连接、监听和定�
 
 文字上限按 Unicode 码点计算。`usage` 必须是数值非负且有限的对象，不能是数组；`later.at` 必须是真实日期的 ISO 日期时间，带 `Z` 或时区偏移。回执先核验整体，再执行。
 
-`npm test` 包含种子 24301 的 200000 步模拟，以及两台接单程序、两条来源事件、一张问题卡片的全部 8!（40320）种动作顺序；另检查卡片更新、旧版本回答、当前版本文字回答、结案、两通道投递、重启的全部 7!（5040）种顺序。模拟每 128 步换一个独立场景，每个场景结束前停止故障并把工作处理完；每次状态转换都检查不变量和完整日志重放；随机动作包含同 key 内容更新与旧版本回答，核对带版本的已接受回答不早于当时的内容版本、恢复后可投递的更新在各通道追上最新版。定时事件由真实到期表触发，恢复后检查到期任务没有遗留。它证明这些有限场景，不代表任意大小状态空间已被穷尽。单独复现：`node sim/random.ts 24301 200000`、`node sim/enumerate.ts`。
+`npm test` 包含种子 24301 的 200000 步模拟，以及两台接单程序、两条来源事件、一张问题卡片的全部 8!（40320）种动作顺序；另检查卡片更新、旧版本回答、当前版本文字回答、结案、两通道投递、重启的全部 7!（5040）种顺序。模拟每 128 步换一个独立场景，每个场景结束前停止故障并把工作处理完；每次状态转换都检查不变量和完整日志重放；随机动作包含同 key 内容更新、`continue` 续用（重新开放与 ask/FYI 互转）及旧版本回答；检查原归属、通道 ref、重置投递与历史回答快照，CI 要求续用、重新开放、跨 kind 计数都非零。另以定向测试覆盖同卡多次回答和待处理回答的保留。模拟还核对带版本的已接受回答不早于当时的内容版本、恢复后可投递的更新在各通道追上最新版。定时事件由真实到期表触发，恢复后检查到期任务没有遗留。它证明这些有限场景，不代表任意大小状态空间已被穷尽。单独复现：`node sim/random.ts 24301 200000`、`node sim/enumerate.ts`。
 
 `npm run test:nightly` 做 1000 次真进程 SIGKILL、包括只告知卡片在内的可执行内核变异和性能检查。崩溃用真 SQLite WAL + FULL，核对已确认序号、完整性、视图、重放和重复提交；它测进程退出，不模拟整机断电。变异漏过的名字和比例直接输出，不能用语法错误算检出；`receipt-fyi` 故意丢掉回执的告知标记，必须被行为测试检出。`node sim/crash.ts 1000 12648430` 和 `node sim/mutate.ts` 可分别复现。
 

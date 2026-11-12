@@ -81,6 +81,20 @@ CREATE TABLE cards (
   closed_at TEXT
 );
 
+CREATE TABLE answers (
+  id INTEGER PRIMARY KEY,
+  card_id INTEGER NOT NULL,
+  rule TEXT,
+  lane TEXT NOT NULL,
+  title TEXT NOT NULL,
+  options TEXT NOT NULL,
+  choice INTEGER,
+  answer TEXT,
+  about TEXT,
+  by TEXT,
+  decided_at TEXT
+);
+
 CREATE TABLE deliveries (
   card_id INTEGER NOT NULL,
   channel TEXT NOT NULL,

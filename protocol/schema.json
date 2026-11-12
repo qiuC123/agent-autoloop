@@ -92,6 +92,10 @@
           "maxLength": 20,
           "minLength": 1,
           "pattern": "\\S"
+        },
+        "continue": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": ["title", "text", "options"],
@@ -171,6 +175,10 @@
           "maxLength": 100
         },
         "fyi": {
+          "type": "boolean",
+          "default": false
+        },
+        "continue": {
           "type": "boolean",
           "default": false
         }

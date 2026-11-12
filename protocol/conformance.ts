@@ -160,6 +160,36 @@ export async function conformance(base: string, config: Probe, request: typeof f
   await call(`/v1/runs/${next.run}/cancel`, keys.owner, {});
   assert.ok((await call("/v1/work?claim=cancel&capacity=0&wait=0", keys.worker)).cancel.includes(next.run));
   await call(`/v1/runs/${next.run}/result`, next.token, { outcome: "cancelled" });
+  await resubmit("continue", { ...result.ask[0], continue: true });
+  const continued = (await call("/v1/cards/next?wait=0", keys.channel)).card;
+  assert.deepEqual(checkSchema("card", continued), []);
+  assert.deepEqual(
+    [continued.id, continued.ref, continued.state, continued.content_version, continued.choice],
+    [card.id, updated.ref, "open", continued.version, null],
+  );
+  await call(`/v1/cards/${card.id}/answer`, keys.channel, answer, 409, "error");
+  await call(`/v1/cards/${card.id}/delivered`, keys.channel, { version: continued.version, ref: continued.ref });
+  const fyi = { title: "已上线", text: "完成", key: tag, fyi: true, continue: true };
+  await call("/v1/events", keys.source, { ...event, id: `${tag}-continued-fyi` });
+  const report = (await take()).job;
+  for (const kind of ["ask", "notice"])
+    await call(
+      `/v1/runs/${report.run}/result`,
+      report.token,
+      { outcome: "done", [kind]: [{ ...(kind === "ask" ? result.ask[0] : fyi), continue: "true" }] },
+      400,
+    );
+  await call(`/v1/runs/${report.run}/result`, report.token, { outcome: "done", notice: [fyi] });
+  const closed = (await call("/v1/cards/next?wait=0", keys.channel)).card;
+  assert.deepEqual([closed.id, closed.state, closed.options, closed.ref], [card.id, "closed", [], continued.ref]);
+  await call(`/v1/cards/${card.id}/delivered`, keys.channel, { version: closed.version, ref: closed.ref });
+  await resubmit("reopen", { ...result.ask[0], continue: true });
+  const reopened = (await call("/v1/cards/next?wait=0", keys.channel)).card;
+  assert.deepEqual(
+    [reopened.id, reopened.ref, reopened.state, reopened.version],
+    [card.id, closed.ref, "open", closed.version + 1],
+  );
+  await call(`/v1/cards/${card.id}/delivered`, keys.channel, { version: reopened.version, ref: reopened.ref });
   const told = await call("/v1/tell", keys.source, { key: tag, text: "检查完成" });
   assert.equal(told.duplicate, false);
   assert.equal((await call("/v1/tell", keys.source, { key: tag, text: "检查完成" })).duplicate, true);

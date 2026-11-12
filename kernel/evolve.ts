@@ -6,6 +6,7 @@ export const TABLES = [
   "runs",
   "run_events",
   "cards",
+  "answers",
   "deliveries",
   "timers",
   "schedules",
@@ -18,7 +19,7 @@ export type Table = (typeof TABLES)[number];
 export type Change = { table: Table; key: string; row: Row | null };
 export type Fact = { version: 1; seq: number; at: number; type: string; changes: Change[]; meta?: Row };
 export type Match = Record<string, SQLInputValue | SQLInputValue[] | { not: null }>;
-const NUMBERED = new Set<Table>(["events", "runs", "cards", "timers"]);
+const NUMBERED = new Set<Table>(["events", "runs", "cards", "answers", "timers"]);
 const indexes: Partial<Record<Table, string[][]>> = {
   events: [["source", "key"], ["routed", "id"], ["id"]],
   runs: [["state", "id"], ["rule", "lane", "state", "id"], ["id"], ["finished_at"]],
@@ -39,6 +40,7 @@ const indexes: Partial<Record<Table, string[][]>> = {
     ["rule", "lane", "event_id", "id"],
   ],
   deliveries: [["channel"], ["card_id"]],
+  answers: [["rule", "lane", "card_id", "id"], ["card_id"], ["id"]],
   due: [["at"]],
 };
 const field = (name: string) => `json_extract(data,'$.${name}')`;
@@ -118,7 +120,8 @@ export class View {
         .select(table, match, limit === undefined ? undefined : limit + changed.size, reverse)
         .filter((row) => !changed.has(keyOf(table, row)));
       for (const row of changed.values()) if (row && accepts(row)) found.push(row);
-      if (NUMBERED.has(table)) found.sort((a, b) => (reverse ? b.id - a.id : a.id - b.id));
+      if (NUMBERED.has(table))
+        found.sort((a, b) => (reverse ? -1 : 1) * ((table === "answers" ? a.card_id - b.card_id : 0) || a.id - b.id));
       else
         found.sort(
           (a, b) => (reverse ? -1 : 1) * Buffer.compare(Buffer.from(keyOf(table, a)), Buffer.from(keyOf(table, b))),
@@ -137,8 +140,10 @@ export class View {
       return `${field(key)} IS ?`;
     });
     // With IN filters, sorting the matching rows avoids the planner scanning every historic ID in order.
-    const order = NUMBERED.has(table) ? `${Object.values(match).some(Array.isArray) ? "+" : ""}${field("id")}` : "key";
-    const sql = `SELECT key,data FROM projections WHERE collection='${table}'${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY ${order} ${reverse ? "DESC" : "ASC"}${limit === undefined ? "" : " LIMIT ?"}`;
+    const sort = Object.values(match).some(Array.isArray) ? "+" : "";
+    const order = NUMBERED.has(table) ? `${sort}${field("id")}` : "key";
+    const answerOrder = table === "answers" ? `${sort}${field("card_id")} ${reverse ? "DESC" : "ASC"},` : "";
+    const sql = `SELECT key,data FROM projections WHERE collection='${table}'${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY ${answerOrder}${order} ${reverse ? "DESC" : "ASC"}${limit === undefined ? "" : " LIMIT ?"}`;
     if (limit !== undefined) params.push(limit);
     return statement(this.db, sql)
       .all(...params)
@@ -204,10 +209,22 @@ export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = 
     seq = fact.seq;
     const pending = new Map<string, Change>();
     for (const change of fact.changes) {
+      // Answers retain the question as seen, even when its card is later reused; old logs rebuild the same snapshots.
+      if (change.table === "cards" && change.row?.answer_event != null) {
+        const row = change.row;
+        statement(db, "INSERT OR IGNORE INTO projections VALUES ('answers',?,?)").run(
+          String(row.answer_event),
+          JSON.stringify({ ...row, id: row.answer_event, card_id: row.id }),
+        );
+      }
       pending.set(`${change.table}:${change.key}`, change);
       if (typeof change.row?.id === "number") next[change.table] = Math.max(next[change.table] ?? 0, change.row.id);
     }
     for (const { table, key, row } of pending.values()) {
+      if (table === "cards" && row === null)
+        statement(db, "DELETE FROM projections WHERE collection='answers' AND json_extract(data,'$.card_id')=?").run(
+          Number(key),
+        );
       if (["events", "runs", "cards"].includes(table))
         statement(db, "INSERT OR IGNORE INTO projection_refs VALUES (?,?,?)").run(table, key, fact.seq);
       if (row === null) remove.run(table, key);

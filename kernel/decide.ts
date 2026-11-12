@@ -125,8 +125,15 @@ const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
 
 function createCard(draft: Draft, spec: Row, update = false) {
-  // FYIs remain closed; their keys must not consume or reopen an actionable card.
-  const match: Match = spec.once ? {} : spec.fyi ? { fyi: 1 } : { state: "open" };
+  // Only receipt opt-in can cross lifecycle and kind boundaries; system deduplication stays unchanged.
+  const continuing = update && spec.continue === true && !spec.once;
+  const match: Match = spec.once
+    ? {}
+    : continuing
+      ? { rule: spec.rule, lane: spec.lane }
+      : spec.fyi
+        ? { fyi: 1 }
+        : { state: "open" };
   const existing = rows(draft.view, "cards", { key: spec.key, ...match }, 1, true)[0];
   const content = {
     title: spec.title,
@@ -135,6 +142,7 @@ function createCard(draft: Draft, spec: Row, update = false) {
     recommend: spec.recommend ?? null,
     about: spec.about ?? "",
     input: spec.input ?? null,
+    ...(continuing && { kind: spec.kind, fyi: spec.fyi ? 1 : 0, state: spec.fyi ? "closed" : "open" }),
   };
   const report = (card: number, action: string) => {
     (draft.cards ??= []).push({ card, action });
@@ -142,15 +150,22 @@ function createCard(draft: Draft, spec: Row, update = false) {
   };
   if (existing) {
     const changed = Object.entries(content).some(([key, value]) => existing[key] !== value);
-    if (!update || spec.once || existing.kind !== spec.kind || !changed) return report(existing.id, "duplicate");
+    if (!update || spec.once || (!continuing && existing.kind !== spec.kind) || !changed)
+      return report(existing.id, "duplicate");
     const version = existing.version + 1;
-    put(draft, "cards", existing.id, { ...content, version, content_version: version });
+    const reset = continuing
+      ? {
+          ...nulls("choice", "answer", "by", "result", "answer_event", "decided_at", "closed_at"),
+          quiet: spec.quiet ? 1 : 0,
+        }
+      : {};
+    put(draft, "cards", existing.id, { ...content, ...reset, version, content_version: version });
     // New content gets its own delivery attempts, retaining each channel's original message identity.
     for (const delivery of rows(draft.view, "deliveries", { card_id: existing.id }))
       put(draft, "deliveries", `${existing.id}:${delivery.channel}`, { ...NOT_TRYING, given_up: 0, error: null });
     return report(existing.id, "updated");
   }
-  const { once, run, options, fyi, quiet, ...fields } = spec;
+  const { once, continue: _continue, run, options, fyi, quiet, ...fields } = spec;
   const stored = {
     run_id: run ?? null,
     options: JSON.stringify(options ?? []),
@@ -230,8 +245,12 @@ function heldRun(draft: Draft, id: number, token: string, states: string[]) {
   return run;
 }
 
-function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
+function receiptCardKey(run: Row, card: Row) {
   const name = card.key ?? digest(`${card.title}\n${card.text}`).slice(0, 32);
+  return `thread:${run.rule}:${run.lane}:${name}`;
+}
+
+function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
   const session = draft.view.get("runs", run.id)!.session;
   const quiet = kind === "notice" && ruleNamed(draft, run.rule)?.tell === "never";
   const origin = {
@@ -241,7 +260,7 @@ function cardFromReceipt(draft: Draft, run: Row, kind: string, card: Row) {
     workspace_run: run.workspace_run ?? run.id,
     run: run.id,
   };
-  const key = `thread:${run.rule}:${run.lane}:${name}`;
+  const key = receiptCardKey(run, card);
   createCard(draft, { ...card, hops: hopsOf(draft, run), key, kind, quiet, ...threadOf(run), ...origin }, true);
 }
 
@@ -373,8 +392,15 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
   closeOpen(draft, (key) => key === `run:${id}:failing`, "后来跑成了");
   closeOpen(draft, (key) => key === `run:${id}:unknown`, "结果回来了");
   const eventIds = eventsOf(draft.view, id).map((event) => event.id);
+  const continued = [...(rule?.ask === false ? [] : (result.ask ?? [])), ...(result.notice ?? [])]
+    .filter((card) => card.continue)
+    .map(
+      (card) =>
+        rows(draft.view, "cards", { key: receiptCardKey(run, card), rule: run.rule, lane: run.lane }, 1, true)[0]?.id,
+    );
   const isAnswered = (card: Row) => card.state === "decided" && eventIds.includes(card.answer_event);
   for (const card of rows(draft.view, "cards", { answer_event: eventIds, state: "decided" }).filter(isAnswered)) {
+    if (continued.includes(card.id)) continue;
     put(draft, "cards", card.id, { state: "done", result: summary, closed_at: draft.at, version: card.version + 1 });
   }
   for (const item of result.resolve ?? []) {

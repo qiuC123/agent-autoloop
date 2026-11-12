@@ -5,7 +5,7 @@
 // identifier reaches the subject; a ping makes an event; replacement tokens in card text rewrite a webhook template.
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
 // Text submits must use form_value; stale answers must notify at the original message without patching the card.
-// FYIs must render only information, without any callback, form or acknowledgement button.
+// FYIs must render only information, without any callback, form or acknowledgement button; reopening must patch them.
 // Short choices must stay compact without losing recommendation or callback values; long choices must still wrap.
 // The required text field and submit must share a row without a separate label.
 import assert from "node:assert/strict";
@@ -312,6 +312,7 @@ else {
 
 test("feishu: sends once per card, updates in place, reports failure, and only real clicks count", async () => {
   const log = join(dir, "lark.log");
+  const payloads = join(dir, "lark-payloads.jsonl");
   const lark = join(dir, "lark-cli");
   // A stand-in for lark-cli: records each call; `event consume` prints two clicks and waits to be stopped.
   writeFileSync(
@@ -328,6 +329,7 @@ if (args[0] === 'event') {
   let input = '';
   process.stdin.on('data', chunk => input += chunk);
   process.stdin.on('end', () => {
+    fs.appendFileSync(${JSON.stringify(payloads)}, JSON.stringify({args,input}) + '\\n');
     if (input.includes('fail-me')) process.exit(1);
     console.log(JSON.stringify({ok:true,data:{message_id:'om_5'}}));
   });
@@ -339,6 +341,8 @@ if (args[0] === 'event') {
   const cards: (Card | null)[] = [
     base,
     { ...base, version: 2, ref: "om_5", state: "decided", choice: 1 },
+    { ...base, version: 3, content_version: 3, ref: "om_5", kind: "notice", state: "closed", fyi: true, options: [] },
+    { ...base, version: 4, content_version: 4, ref: "om_5", input: "返工意见" },
     { ...base, id: 6, title: "fail-me", ref: null },
   ];
   const calls: unknown[][] = [];
@@ -378,6 +382,31 @@ if (args[0] === 'event') {
   assert.deepEqual(
     calls.find((c) => c[0] === "delivered" && c[2] === 2),
     ["delivered", 5, 2, "om_5"],
+  );
+  const patches = readFileSync(payloads, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter(({ args }) => args.includes("patch"));
+  assert.equal(patches.length, 3);
+  for (const patch of patches) assert.equal(patch.args[patch.args.indexOf("--message-id") + 1], "om_5");
+  const closed = JSON.parse(JSON.parse(patches[1].input).content);
+  assert.equal(closed.header.template, "grey");
+  assert.doesNotMatch(JSON.stringify(closed.body), /callback|"form"|"input"/);
+  const reopened = JSON.parse(JSON.parse(patches[2].input).content);
+  assert.equal(reopened.header.template, "blue");
+  assert.match(JSON.stringify(reopened.body), /返工意见/);
+  assert.match(JSON.stringify(reopened.body), /"tag":"form"/);
+  const callbacks = [...JSON.stringify(reopened).matchAll(/"value":(\{[^}]+\})/g)].map((match) => JSON.parse(match[1]));
+  assert.equal(callbacks.length, 3);
+  for (const value of callbacks) assert.equal(value.version, 4);
+  assert.deepEqual(
+    callbacks.map((value) => value.choice ?? value.text),
+    [0, 1, true],
+  );
+  assert.deepEqual(
+    calls.filter((c) => c[0] === "delivered").map((c) => c.slice(1)),
+    [1, 2, 3, 4].map((version) => [5, version, "om_5"]),
   );
   assert.deepEqual(
     calls.find((c) => c[0] === "failed"),

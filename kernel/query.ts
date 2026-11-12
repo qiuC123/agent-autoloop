@@ -79,13 +79,10 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
   const events = eventsOf(view, run.id);
   const eventIds = events.map((event) => event.id);
   const thread = { rule: run.rule, lane: run.lane };
-  const answers = rows(view, "cards", { ...thread, answer_event: eventIds });
+  const answers = rows(view, "answers", { ...thread, id: eventIds });
   const timers = rows(view, "timers", { ...thread, event_id: eventIds });
   const waiting = rows(view, "timers", { ...thread, event_id: null });
-  const decided = ["decided", "done"]
-    .flatMap((state) => rows(view, "cards", { ...thread, state }, 20, true))
-    .sort((a, b) => b.id - a.id)
-    .slice(0, 20);
+  const decided = rows(view, "answers", thread, 20, true);
   const timerView = (timer: Row) => ({ key: timer.key, about: timer.about, at: timer.at });
   return {
     run: run.id,
@@ -109,7 +106,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
         const sourceName = rules.sources[source]?.name ?? source;
         return { id, source, sourceName, type, subject, summary, detail, link, receivedAt, hops: hops ?? 0 };
       }),
-      answers: answers.map(({ id: card, title, options, choice, answer: text, about, by, decided_at: at }) => {
+      answers: answers.map(({ card_id: card, title, options, choice, answer: text, about, by, decided_at: at }) => {
         return { card, title, options: JSON.parse(options), choice, text, about, by, at };
       }),
       timers: timers.filter((timer) => eventIds.includes(timer.event_id)).map(timerView),
@@ -122,8 +119,13 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
       })),
       decided: decided
         .filter((card) => !answers.some((answer) => answer.id === card.id))
-        .map(({ id, title, choice, answer, options, decided_at }) => {
-          return { card: id, title, choice: choice === null ? answer : JSON.parse(options)[choice], at: decided_at };
+        .map(({ card_id, title, choice, answer, options, decided_at }) => {
+          return {
+            card: card_id,
+            title,
+            choice: choice === null ? answer : JSON.parse(options)[choice],
+            at: decided_at,
+          };
         }),
     },
   };

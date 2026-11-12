@@ -27,6 +27,9 @@ export function simulate(seed = 0x5eed, steps = 200000) {
     update: 0,
     staleAnswer: 0,
     fyi: 0,
+    continue: 0,
+    reopen: 0,
+    changeKind: 0,
   };
   let world = new World();
   let completed = 0;
@@ -40,7 +43,7 @@ export function simulate(seed = 0x5eed, steps = 200000) {
         receipts.length = 0;
       }
       world.advance(rng(30000));
-      const op = rng(14);
+      const op = rng(15);
       const live = rows(world.view, "runs").filter((r) => ["claimed", "unknown"].includes(r.state));
       if (op < 3) {
         const id = String(rng(16));
@@ -129,11 +132,42 @@ export function simulate(seed = 0x5eed, steps = 200000) {
               job.rule.name === card.rule && job.context.events.some((e: any) => e.subject === card.lane);
             world.finish(job.run, {
               outcome: "done",
-              ask: [{ title: "选择", text: `新内容 ${step}`, options: ["甲", "乙"], key: "question" }],
+              ask: [
+                {
+                  title: "选择",
+                  text: `新内容 ${step}`,
+                  options: ["甲", "乙"],
+                  key: card.key.slice(`thread:${card.rule}:${card.lane}:`.length),
+                },
+              ],
             });
             if (matching) {
               faults.update++;
               assert.equal(world.view.get("cards", card.id)!.version, card.version + 1);
+            }
+          }
+        }
+      } else if (op === 14) {
+        const candidates = rows(world.view, "cards", { rule: "one" }).filter((card) =>
+          card.key.startsWith(`thread:one:${card.lane}:`),
+        );
+        const card = candidates[rng(candidates.length)];
+        if (card) {
+          world.call("ingest", "app", { id: `continue-${step}`, type: "one", subject: card.lane });
+          const job = world.call("claimNext", "w1", `continue-${step}`);
+          if (job) {
+            const key = card.key.slice(`thread:${card.rule}:${card.lane}:`.length);
+            const fyi = rng(2) === 0;
+            const spec = { key, title: "进度", text: `续用 ${step}`, continue: true };
+            world.finish(job.run, {
+              outcome: "done",
+              ...(fyi ? { notice: [{ ...spec, fyi: true }] } : { ask: [{ ...spec, options: ["甲", "乙"] }] }),
+            });
+            const updated = world.view.get("cards", card.id)!;
+            if (updated.content_version > card.content_version) {
+              faults.continue++;
+              if (card.state !== "open" && updated.state === "open") faults.reopen++;
+              if (card.kind !== updated.kind) faults.changeKind++;
             }
           }
         }

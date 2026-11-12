@@ -4,6 +4,7 @@
 // history size forces a point lookup to scan or populate a whole JavaScript table.
 // Old cards must acquire creation content_version, not their latest state version, on rebuild without rewriting facts.
 // Historical notices and FYI reports must keep their original lifecycle and delivery flag.
+// Rebuilding answer snapshots must preserve the original question after its card changes, without rewriting old facts.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -12,6 +13,32 @@ import { commit, openView } from "../kernel/store.ts";
 import { cardView } from "../kernel/query.ts";
 
 const fact = (seq: number, changes: Fact["changes"]): Fact => ({ version: 1, seq, at: seq, type: "fixture", changes });
+
+test("old answer facts rebuild immutable snapshots across a continuation and format change", () => {
+  const db = new DatabaseSync(":memory:");
+  const old = {
+    id: 1,
+    answer_event: 7,
+    state: "decided",
+    rule: "one",
+    lane: "#1",
+    title: "旧问题",
+    options: '["同意","取消"]',
+    choice: 0,
+  };
+  let view = commit(db, openView(db, "old"), () => [fact(1, [{ table: "cards", key: "1", row: old }])]);
+  view = commit(db, view, () => [
+    fact(2, [
+      { table: "cards", key: "1", row: { ...old, state: "open", answer_event: null, choice: null, title: "新问题" } },
+    ]),
+  ]);
+  const saved = db.prepare("SELECT * FROM facts ORDER BY seq").all();
+  const answer = { ...old, id: 7, card_id: 1 };
+  assert.deepEqual(view.get("answers", 7), answer);
+  assert.deepEqual(openView(db, "new").get("answers", 7), answer);
+  assert.deepEqual(db.prepare("SELECT * FROM facts ORDER BY seq").all(), saved);
+  db.close();
+});
 test("legacy notices and reports survive restart and projection rebuild without reinterpretation", () => {
   const db = new DatabaseSync(":memory:");
   const cards = [

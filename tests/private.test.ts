@@ -1,5 +1,6 @@
 // Failure modes: POSIX modes leave Windows keys readable; a transient native timeout fails without retry,
-// or exhausted ACL retries still publish secrets or cache an unprotected directory.
+// or exhausted ACL retries still publish secrets or cache an unprotected directory. Reapplying an unchanged
+// inheritable DACL traverses every old run on restart; skipping a changed DACL leaves secrets exposed.
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import { join } from "node:path";
@@ -14,6 +15,74 @@ import { runAclCommand } from "../host/windows-acl.ts";
 const home = setup("private");
 const runtime = await import("../host/runtime.ts");
 const { writeConfig } = await import("../host/config.ts");
+
+function protectInNewProcess(file: string, directory: boolean) {
+  const script = `
+    import cp from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { privateDirectory, privateFile } from ${JSON.stringify(new URL("../host/private.ts", import.meta.url).href)};
+    const original = cp.execFileSync;
+    cp.execFileSync = (program, args, options) => {
+      const output = original(program, args, options);
+      if (program.endsWith('acl.exe')) process.stdout.write(output);
+      return output;
+    };
+    syncBuiltinESMExports();
+    ${directory ? "privateDirectory" : "privateFile"}(${JSON.stringify(file)});
+  `;
+  return execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    timeout: 30_000,
+    encoding: "utf8",
+    windowsHide: true,
+  }).trim();
+}
+
+function inspectOrChangeAcl(file: string, directory: boolean, change = "") {
+  const script = `$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(file).toString("base64")}')); $acl=[IO.${directory ? "Directory" : "File"}]::GetAccessControl($p); ${change}; @{protected=$acl.AreAccessRulesProtected;sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|ForEach-Object{@{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;inherited=$_.IsInherited;inheritance=[int]$_.InheritanceFlags;propagation=[int]$_.PropagationFlags;type=[int]$_.AccessControlType}})}|ConvertTo-Json -Depth 4 -Compress`;
+  return JSON.parse(
+    execFileSync(
+      join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe"),
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { timeout: 30_000, encoding: "utf8" },
+    ),
+  );
+}
+
+for (const directory of [true, false]) {
+  test(
+    `private ${directory ? "directory" : "file"} ACLs skip unchanged permissions across processes and repair extra grants`,
+    { skip: process.platform !== "win32" },
+    (t) => {
+      const target = join(home, directory ? "restart-directory" : "restart-file");
+      if (directory) mkdirSync(target);
+      else fs.writeFileSync(target, "test-only");
+      assert.match(protectInNewProcess(target, directory), /^(applied)?$/);
+      const actual = inspectOrChangeAcl(target, directory);
+      assert.equal(actual.protected, true);
+      assert.deepEqual(actual.rules, [
+        {
+          sid: actual.sid,
+          rights: 2032127,
+          inherited: false,
+          inheritance: directory ? 3 : 0,
+          propagation: 0,
+          type: 0,
+        },
+      ]);
+      t.diagnostic(`FullControl readback (${directory ? "directory" : "file"}): ${actual.rules[0].rights}`);
+      assert.equal(protectInNewProcess(target, directory), "unchanged");
+      inspectOrChangeAcl(
+        target,
+        directory,
+        `$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-1-0')),'Read','Allow'))); [IO.${directory ? "Directory" : "File"}]::SetAccessControl($p,$acl)`,
+      );
+      assert.equal(protectInNewProcess(target, directory), "applied");
+      assert.deepEqual(inspectOrChangeAcl(target, directory), actual);
+      assert.equal(protectInNewProcess(target, directory), "unchanged");
+    },
+  );
+}
+
 test("native ACL commands retry only timeouts, never permission failures", (t) => {
   let calls = 0;
   let code = "ETIMEDOUT";

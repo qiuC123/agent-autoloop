@@ -12,18 +12,20 @@ class WindowsAcl {
             var user = WindowsIdentity.GetCurrent().User;
             var inherit = directory ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None;
             if (args.Length == 2) {
-                FileSystemSecurity current = directory ? (FileSystemSecurity)Directory.GetAccessControl(file) : File.GetAccessControl(file);
-                var rules = current.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                if (current.AreAccessRulesProtected && rules.Count == 1) {
-                    var rule = (FileSystemAccessRule)rules[0];
-                    // Require the exact ACE; combining split grants could hide different inheritance semantics.
-                    if (!rule.IsInherited && rule.IdentityReference.Equals(user) &&
-                        rule.AccessControlType == AccessControlType.Allow && rule.FileSystemRights == FileSystemRights.FullControl &&
-                        rule.InheritanceFlags == inherit && rule.PropagationFlags == PropagationFlags.None) {
-                        Console.WriteLine("unchanged");
-                        return 0;
+                try {
+                    FileSystemSecurity current = directory ? (FileSystemSecurity)Directory.GetAccessControl(file) : File.GetAccessControl(file);
+                    var rules = current.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                    if (current.AreAccessRulesProtected && rules.Count == 1) {
+                        var rule = (FileSystemAccessRule)rules[0];
+                        // Require the exact ACE; combining split grants could hide different inheritance semantics.
+                        if (!rule.IsInherited && rule.IdentityReference.Equals(user) &&
+                            rule.AccessControlType == AccessControlType.Allow && rule.FileSystemRights == FileSystemRights.FullControl &&
+                            rule.InheritanceFlags == inherit && rule.PropagationFlags == PropagationFlags.None) {
+                            Console.WriteLine("unchanged");
+                            return 0;
+                        }
                     }
-                }
+                } catch (Exception) { /* An unreadable DACL is rewritten below. */ }
             }
             FileSystemSecurity acl = directory ? (FileSystemSecurity)new DirectorySecurity() : new FileSecurity();
             acl.SetAccessRuleProtection(true, false);

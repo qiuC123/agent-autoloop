@@ -9,10 +9,25 @@ class WindowsAcl {
         try {
             string file = args[0];
             bool directory = args[1] == "directory";
+            var user = WindowsIdentity.GetCurrent().User;
+            var inherit = directory ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None;
+            if (args.Length == 2) {
+                FileSystemSecurity current = directory ? (FileSystemSecurity)Directory.GetAccessControl(file) : File.GetAccessControl(file);
+                var rules = current.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                if (current.AreAccessRulesProtected && rules.Count == 1) {
+                    var rule = (FileSystemAccessRule)rules[0];
+                    // Require the exact ACE; combining split grants could hide different inheritance semantics.
+                    if (!rule.IsInherited && rule.IdentityReference.Equals(user) &&
+                        rule.AccessControlType == AccessControlType.Allow && rule.FileSystemRights == FileSystemRights.FullControl &&
+                        rule.InheritanceFlags == inherit && rule.PropagationFlags == PropagationFlags.None) {
+                        Console.WriteLine("unchanged");
+                        return 0;
+                    }
+                }
+            }
             FileSystemSecurity acl = directory ? (FileSystemSecurity)new DirectorySecurity() : new FileSecurity();
             acl.SetAccessRuleProtection(true, false);
-            var inherit = directory ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None;
-            acl.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User, FileSystemRights.FullControl,
+            acl.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
                 inherit, PropagationFlags.None, AccessControlType.Allow));
             if (args.Length == 4) {
                 var agent = new SecurityIdentifier(args[2]);
@@ -29,6 +44,7 @@ class WindowsAcl {
                 data.SetAccessRuleProtection(false, false);
                 File.SetAccessControl(context, data);
             }
+            if (args.Length == 2) Console.WriteLine("applied");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
     }

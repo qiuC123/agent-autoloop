@@ -49,10 +49,10 @@ export function cardPage(card: ReturnType<typeof cardView>) {
     const label = escaped(card.input ?? "别的想法");
     const box = `<input name="text" placeholder="${label}" aria-label="${label}" required>`;
     const other = card.kind === "ask" ? `<form method="post">${version}${box}<button>发送</button></form>` : "";
-    return shell(
-      card.title,
-      `${words}<form method="post">${version}${card.options.map(button).join("")}</form>${other}`,
-    );
+    const choices = card.options.length
+      ? `<form method="post">${version}${card.options.map(button).join("")}</form>`
+      : "";
+    return shell(card.title, `${words}${choices}${other}`);
   }
   const chosen = card.choice !== null ? card.options[card.choice] : card.answer;
   const outcome = [chosen ? `你选了「${chosen}」` : "", card.result ?? ""].filter(Boolean).join("。");

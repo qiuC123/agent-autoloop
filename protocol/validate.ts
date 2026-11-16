@@ -119,7 +119,7 @@ const validAsk = (ask: Item) =>
   optional(ask.key, 100) &&
   (ask.input === undefined || text(ask.input, 20)) &&
   Array.isArray(ask.options) &&
-  ask.options.length >= 2 &&
+  (ask.options.length >= 2 || (ask.options.length === 0 && text(ask.input, 20))) &&
   ask.options.length <= 5 &&
   ask.options.every((option) => text(option, 200)) &&
   (ask.recommend === undefined ||
@@ -172,7 +172,7 @@ export function parseResult(input: unknown): Result {
   if (!validUsage(result.usage)) throw new InputError("usage 要是对象，里面要是有限的非负数字");
   if (!listOf(result.ask, 5, validAsk)) {
     throw new InputError(
-      "ask 每一项要有 title、text 和 2 到 5 个 options，recommend 是其中一个的序号，continue 若填写要是布尔值，最多 5 项",
+      "ask 每一项要有 title、text 和 2 到 5 个 options，或 options: [] 并填写 1 到 20 字的 input；recommend 是选项序号，continue 若填写要是布尔值，最多 5 项",
     );
   }
   if (!listOf(result.notice, 10, validNotice))

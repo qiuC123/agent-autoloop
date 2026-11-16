@@ -71,7 +71,6 @@
             "minLength": 1,
             "pattern": "\\S"
           },
-          "minItems": 2,
           "maxItems": 5
         },
         "recommend": {
@@ -101,6 +100,17 @@
       "required": ["title", "text", "options"],
       "additionalProperties": false,
       "oneOf": [
+        {
+          "required": ["input"],
+          "properties": {
+            "options": {
+              "maxItems": 0
+            },
+            "recommend": {
+              "type": "null"
+            }
+          }
+        },
         {
           "properties": {
             "options": {
@@ -663,6 +673,23 @@
       ],
       "additionalProperties": true,
       "oneOf": [
+        {
+          "required": ["input"],
+          "properties": {
+            "kind": {
+              "const": "ask"
+            },
+            "options": {
+              "maxItems": 0
+            },
+            "input": {
+              "type": "string"
+            },
+            "recommend": {
+              "type": "null"
+            }
+          }
+        },
         {
           "properties": {
             "kind": {

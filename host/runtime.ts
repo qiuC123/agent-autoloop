@@ -6,15 +6,16 @@ import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { HOME, RULES_FILE } from "./home.ts";
 import { privateDirectory, privateFile } from "./private.ts";
+import { indexCardHashes, loadCheckpoint, projectionFormat, registerCardFunctions } from "./checkpoint.ts";
 import { initializeMaintenance, maintenance, readMaintenance } from "./maintenance.ts";
-import { credential, digest, whose as keyHolder } from "../kernel/credentials.ts";
+import { digest, whose as keyHolder } from "../kernel/credentials.ts";
 import { decide } from "../kernel/decide.ts";
-import { AuthError, NotFound } from "../kernel/errors.ts";
+import { AuthError, HistoryArchived, NotFound } from "../kernel/errors.ts";
 import { evolve, rows, keyOf, statement, type Fact, type Row, type Table } from "../kernel/evolve.ts";
 import * as query from "../kernel/query.ts";
 import { eventRule, typeMatches } from "../kernel/rules.ts";
 import { stateOf as state } from "../kernel/state.ts";
-import { commit, openView } from "../kernel/store.ts";
+import { commit, historyBoundary as readBoundary, openView } from "../kernel/store.ts";
 import type { Job } from "../protocol/job.ts";
 import { parseRules as checkRules, RulesError } from "../protocol/rules.ts";
 import type { Rejected } from "../protocol/validate.ts";
@@ -40,8 +41,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS facts(seq INTEGER PRIMARY KEY, fact TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS projections(collection TEXT, key TEXT, data TEXT NOT NULL, PRIMARY KEY(collection, key));
 `);
-db.function("card_token", { deterministic: true }, (id, at) => credential(environment, "card", id, at));
-db.function("card_hash", { deterministic: true }, (id, at) => digest(credential(environment, "card", id, at)));
+registerCardFunctions(db, environment.secret);
 
 const schema = readFileSync(new URL("../kernel/schema.sql", import.meta.url), "utf8");
 const views: string[] = [];
@@ -60,16 +60,10 @@ for (const [, table, body] of schema.matchAll(/CREATE TABLE (\w+) \(([\s\S]*?)\n
 // Other processes must see either the old views or the new ones, never the gap between DROP and CREATE.
 db.exec(`BEGIN IMMEDIATE; ${views.join(";")}; COMMIT`);
 
-// The persisted projection is expendable; the log alone rebuilds it.
-const format = digest(
-  ["../kernel/evolve.ts", "../kernel/schema.sql", "../kernel/credentials.ts", "./runtime.ts"]
-    .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
-    .join("\n") + digest(environment.secret),
-);
+const format = projectionFormat(environment.secret);
+loadCheckpoint(db, format);
 let current = openView(db, format);
-db.exec(
-  "CREATE INDEX IF NOT EXISTS projection_card_hash ON projections(card_hash(json_extract(data,'$.id'),json_extract(data,'$.created_at'))) WHERE collection='cards'",
-);
+indexCardHashes(db);
 
 export const all = <T>(sql: string, params: SQLInputValue[] = []) =>
   db
@@ -214,8 +208,19 @@ export function answerByLink(token: string, given: Answer, now = Date.now()) {
 export const view = (card: Row, ref: string | null = null, links = false) =>
   query.cardView(card, environment, ref, links);
 export const unrouted = (limit = 20) => query.unrouted(getView(), limit);
+export const historyBoundary = () => readBoundary(db);
+
+// Another connection may seal the prefix between the boundary read and the last fact or run lookup.
+function readHistory<T>(read: (boundary: ReturnType<typeof historyBoundary>) => T): T {
+  db.exec("BEGIN");
+  try {
+    return read(historyBoundary());
+  } finally {
+    db.exec("END");
+  }
+}
 export const stateOf = (now = Date.now(), before?: number) =>
-  state(now, before, query.configuration(getView()), { all, view, unrouted });
+  readHistory((boundary) => state(now, before, query.configuration(getView()), { all, view, unrouted, boundary }));
 
 export type KeyKind = "source" | "worker" | "channel" | "owner";
 export const keepKeyHash = (kind: KeyKind, name: string, hash: string, now = Date.now()) =>
@@ -238,9 +243,10 @@ export const logAfter = (after = 0, limit = -1) =>
     .map((row) => query.safeFact(JSON.parse(String(row.fact))));
 
 /** The part of the log that explains one run: its events, cards and receipts, and the rules it ran under. */
-export function why(id: number) {
+function whyFacts(id: number, boundary: ReturnType<typeof historyBoundary>) {
   const latest = getView();
   if (!latest.get("runs", id)) throw new NotFound("没有这一轮");
+  if (id <= boundary.run) throw new HistoryArchived(boundary.seq);
   const events = query.eventsOf(latest, id).map((event) => event.id);
   const cards = [...rows(latest, "cards", { run_id: id }), ...rows(latest, "cards", { answer_event: events })];
   const sequences = new Set<number>();
@@ -256,12 +262,15 @@ export function why(id: number) {
     JSON.parse(String(statement(db, "SELECT fact FROM facts WHERE seq=?").get(seq)!.fact));
   for (const seq of [...sequences])
     for (const change of read(seq).changes)
-      if (change.table === "runs" && change.key === String(id) && change.row?.rules_version)
+      if (change.table === "runs" && change.key === String(id) && change.row && change.row.rules_version > boundary.seq)
         sequences.add(change.row.rules_version);
   for (const event of events) include("events", event);
   for (const card of cards) include("cards", card.id);
   return [...sequences].sort((a, b) => a - b).map((seq) => query.safeFact(read(seq)));
 }
+export const explainRun = (id: number) =>
+  readHistory((boundary) => ({ facts: whyFacts(id, boundary), checkpoint_seq: boundary.seq }));
+export const why = (id: number) => explainRun(id).facts;
 
 // Test fixtures use this to discard rows without changing the behavioral assertions inherited from the SQL kernel.
 export function fixtureClear(table: Table) {

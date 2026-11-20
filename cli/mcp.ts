@@ -58,7 +58,7 @@ function callTool(hub: Hub, name: Tool["name"], args: any) {
     case "status":
       return hub.state();
     case "why":
-      return hub.why(args.run);
+      return hub.why(args.run, true);
     case "answer": {
       const { card, ...answer } = args;
       return hub.answer(card, answer);

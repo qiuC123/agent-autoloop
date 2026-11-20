@@ -311,6 +311,7 @@ async function status() {
     `在跑 ${totals.running} · 排队 ${totals.queued} · 今天做完 ${totals.doneToday} · 等你 ${state.cards.length}`,
   );
   console.log(`${spendLine(state.spending)}\n`);
+  if (state.checkpoint_seq) console.log(`日志 #${state.checkpoint_seq} 及以前的历史已归档。`);
   for (const agent of state.agents) console.log(`${agent.online ? "●" : "○"} ${agent.name}（${agent.worker}）`);
   for (const channel of state.channels) console.log(`${channel.online ? "●" : "○"} ${channel.name}`);
   for (const card of state.cards) {
@@ -486,10 +487,11 @@ async function tell(args: string[]) {
 
 async function why(args: string[]) {
   const id = Number(args[0]);
-  const facts = await ownerClient().why(id);
-  if (args.includes("--json")) return console.log(JSON.stringify(facts, null, 2));
+  const history = await ownerClient().why(id, true);
+  if (args.includes("--json")) return console.log(JSON.stringify(history, null, 2));
   const { formatWhy } = await import("./why.ts");
-  console.log(formatWhy(id, facts));
+  if (history.checkpoint_seq) console.log(`日志 #${history.checkpoint_seq} 及以前的历史已归档。`);
+  console.log(formatWhy(id, history.facts ?? history));
 }
 
 async function checkConformance(args: string[]) {

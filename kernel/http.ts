@@ -1,7 +1,7 @@
 // The doors: every request the hub takes, which key it asks for, and which input it becomes. Nothing is decided here.
 import { cardPage, PAGE_HEADERS, wordsPage } from "./card-page.ts";
 import { whose, type Environment } from "./credentials.ts";
-import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
+import { AuthError, Conflict, HistoryArchived, InputError, NotFound } from "./errors.ts";
 import type { Row, View } from "./evolve.ts";
 import { agentsOf, cancels, cardView, configuration } from "./query.ts";
 
@@ -12,10 +12,10 @@ export type Services = {
   commit: string;
   dispatch(type: string, args: any[], now: number): any;
   state(now: number, before?: number): unknown;
-  why(id: number): unknown;
+  why(id: number): { facts: unknown[]; checkpoint_seq: number };
   card(token: string): Row | undefined;
   wait(until: number, signal: AbortSignal): Promise<void>;
-  stream(after: number, signal: AbortSignal, key: string): ReadableStream;
+  stream(after: number | undefined, signal: AbortSignal, key: string): ReadableStream;
   adapt(source: string, headers: Headers, body: string): Promise<unknown[]>;
 };
 
@@ -193,17 +193,19 @@ async function cardAction(call: Call, id: number, action: string) {
 function state(call: Call) {
   requireKey(call, "owner");
   const before = call.url.searchParams.get("before");
-  if (before !== null && !POSITIVE_ID.test(before)) throw new InputError("编号不正确");
+  if (before !== null && (!POSITIVE_ID.test(before) || !Number.isSafeInteger(Number(before))))
+    throw new InputError("编号不正确");
   return json(call.services.state(call.now, before === null ? undefined : Number(before)));
 }
 
 function stream(call: Call) {
   const { request, services, token } = call;
   requireKey(call, "owner");
-  const after = call.url.searchParams.get("after") ?? request.headers.get("last-event-id") ?? "0";
-  if (!/^\d+$/.test(after) || !Number.isSafeInteger(Number(after))) throw new InputError("日志序号不正确");
+  const after = call.url.searchParams.get("after") ?? request.headers.get("last-event-id");
+  if (after !== null && (!/^\d+$/.test(after) || !Number.isSafeInteger(Number(after))))
+    throw new InputError("日志序号不正确");
   const headers = { "content-type": "text/event-stream", ...NO_STORE, "x-accel-buffering": "no" };
-  return new Response(services.stream(Number(after), request.signal, token), { headers });
+  return new Response(services.stream(after === null ? undefined : Number(after), request.signal, token), { headers });
 }
 
 async function route(call: Call): Promise<Response> {
@@ -231,7 +233,8 @@ async function route(call: Call): Promise<Response> {
   const runId = Number(runPart);
   if (method === "GET" && action === "why") {
     requireKey(call, "owner");
-    return json(services.why(runId));
+    const { facts, checkpoint_seq } = services.why(runId);
+    return Response.json(facts, { headers: { ...NO_STORE, "X-Checkpoint-Seq": String(checkpoint_seq) } });
   }
   if (method === "POST" && action === "cancel") return ownerAct(call, "cancel", runId);
   if (method === "POST" && action === "started") {
@@ -253,6 +256,7 @@ export function createHandler(services: Services) {
     try {
       return await route(call);
     } catch (error) {
+      if (error instanceof HistoryArchived) return json({ error: error.message, checkpoint_seq: error.seq }, 410);
       const status = statusOf(error);
       if (status === 500) throw error;
       const message = error instanceof TooLarge ? "请求最多 1024 KB" : (error as Error).message;

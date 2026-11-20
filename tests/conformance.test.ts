@@ -94,7 +94,10 @@ test("conformance checks another actual run rather than a missing id", async () 
 for (const mode of ["empty", "keys"] as const)
   test(`conformance rejects ${mode} in the fact stream`, async () => {
     const wrong: typeof fetch = async (input, init) => {
-      if (String(input).includes("/v1/stream?after=0"))
+      if (
+        String(input).endsWith("/v1/stream") &&
+        new Headers(init?.headers).get("authorization") === `Bearer ${keys.owner}`
+      )
         return new Response(
           mode === "empty"
             ? "id: 1\n\n"

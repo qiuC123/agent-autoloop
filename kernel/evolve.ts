@@ -57,8 +57,10 @@ export function initialize(db: DatabaseSync) {
   db.exec(`CREATE TABLE IF NOT EXISTS facts(seq INTEGER PRIMARY KEY, fact TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS projections(collection TEXT,key TEXT,data TEXT NOT NULL,PRIMARY KEY(collection,key));
     CREATE TABLE IF NOT EXISTS projection_meta(id INTEGER PRIMARY KEY,seq INTEGER NOT NULL,next TEXT NOT NULL,format TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS history_checkpoint(id INTEGER PRIMARY KEY CHECK(id=1),identity TEXT NOT NULL,seq INTEGER NOT NULL,run INTEGER NOT NULL,sha256 TEXT NOT NULL,format TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS projection_refs(collection TEXT,key TEXT,seq INTEGER,PRIMARY KEY(collection,key,seq));
     CREATE TABLE IF NOT EXISTS projection_pending(key TEXT PRIMARY KEY,card_id INTEGER,channel TEXT);
+    CREATE TABLE IF NOT EXISTS heartbeat_state(collection TEXT NOT NULL,key TEXT NOT NULL,data TEXT,PRIMARY KEY(collection,key));
     CREATE INDEX IF NOT EXISTS pending_channel ON projection_pending(channel,card_id);`);
   indexProjection(db);
   ready.add(db);
@@ -187,6 +189,66 @@ export function empty(db = new DatabaseSync(":memory:")) {
   initialize(db);
   return new View(db);
 }
+
+function applyHeartbeat(db: DatabaseSync, table: string, key: string, data: string | null) {
+  if (table === "runs") {
+    // Only the timestamp belongs to the lease; the business log owns the rest of the run.
+    const result = statement(
+      db,
+      "UPDATE projections SET data=json_set(data,'$.seen_at',?) WHERE collection='runs' AND key=?",
+    ).run(data, key);
+    if (!result.changes) throw new Error("运行心跳缺少对应轮次");
+  } else if (table === "seen" || table === "due") {
+    if (data === null) statement(db, "DELETE FROM projections WHERE collection=? AND key=?").run(table, key);
+    else
+      statement(
+        db,
+        "INSERT INTO projections VALUES (?,?,?) ON CONFLICT(collection,key) DO UPDATE SET data=excluded.data",
+      ).run(table, key, data);
+  } else throw new Error("心跳状态包含未知记录");
+}
+
+export function restoreHeartbeatState(db: DatabaseSync) {
+  for (const row of statement(db, "SELECT collection,key,data FROM heartbeat_state").iterate())
+    applyHeartbeat(db, String(row.collection), String(row.key), row.data as string | null);
+}
+
+export function copyHeartbeatState(from: DatabaseSync, to: DatabaseSync) {
+  to.exec("DELETE FROM heartbeat_state");
+  if (!from.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='heartbeat_state'").get()) return;
+  const put = to.prepare("INSERT INTO heartbeat_state(collection,key,data) VALUES (?,?,?)");
+  for (const { collection, key, data } of from.prepare("SELECT collection,key,data FROM heartbeat_state").iterate())
+    put.run(collection, key, data);
+}
+
+/** Polls can resolve a notice as well as refresh presence, leases and deadlines. Only the resolution is history. */
+export function compactHeartbeats(db: DatabaseSync, facts: Fact[]): Fact[] {
+  const [fact] = facts;
+  if (facts.length !== 1 || (fact.type !== "heartbeat" && fact.type !== "channelSeen")) {
+    // A later business write supersedes a compacted lease, even if the wall clock moved backwards.
+    for (const business of facts)
+      for (const { table, key } of business.changes)
+        if (table === "runs" || table === "due" || table === "seen")
+          statement(db, "DELETE FROM heartbeat_state WHERE collection=? AND key=?").run(table, key);
+    return facts;
+  }
+  const changes: Change[] = [];
+  for (const change of fact.changes) {
+    const { table, key, row } = change;
+    if (table !== "seen" && table !== "due" && table !== "runs") {
+      changes.push(change);
+      continue;
+    }
+    const data: string | null = table === "runs" ? row!.seen_at : row === null ? null : JSON.stringify(row);
+    statement(
+      db,
+      "INSERT INTO heartbeat_state VALUES (?,?,?) ON CONFLICT(collection,key) DO UPDATE SET data=excluded.data",
+    ).run(table, key, data);
+    applyHeartbeat(db, table, key, data);
+  }
+  return changes.length ? [{ ...fact, type: "workerReconnected", changes }] : [];
+}
+
 export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = false): View {
   initialize(db);
   if (reset) {
@@ -258,6 +320,13 @@ export function evolve(view: View, facts: Iterable<Fact>, db = view.db, reset = 
   return new View(db, seq, next, view.format);
 }
 const ready = new WeakSet<DatabaseSync>();
+
+export function restoreSealed(db: DatabaseSync, seq: number, next: Record<string, number>, format: string) {
+  evolve(new View(db), [], db, true);
+  db.exec(`INSERT INTO projections(collection,key,data) SELECT collection,key,data FROM sealed.projections;
+    INSERT INTO projection_pending(key,card_id,channel) SELECT key,card_id,channel FROM sealed.projection_pending`);
+  return new View(db, seq, next, format);
+}
 
 export function snapshot(view: View) {
   const tables = Object.fromEntries(TABLES.map((table) => [table, {}])) as Record<Table, Record<string, Row>>;

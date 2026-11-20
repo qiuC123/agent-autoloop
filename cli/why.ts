@@ -35,8 +35,11 @@ export function formatWhy(id: number, facts: Fact[]) {
 
   function tellRun(fact: Fact, row: Row, before: Row | undefined, receipt: boolean) {
     if (row.claimed_at && row.claimed_at !== before?.claimed_at) {
-      const agent = rulesAt.get(row.rules_version).agents[row.agent];
-      add(row.claimed_at, `${agent.worker} 领取（${agent.name}）`);
+      const agent = rulesAt.get(row.rules_version)?.agents[row.agent];
+      add(
+        row.claimed_at,
+        agent ? `${agent.worker} 领取（${agent.name}）` : `领取（${row.agent}，规则版本 #${row.rules_version} 已归档）`,
+      );
     }
     if (fact.type === "started" && !started.has(row.issued)) {
       add(fact.at, "开始处理");

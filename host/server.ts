@@ -5,14 +5,16 @@ import { basename, dirname } from "node:path";
 import { RULES_FILE } from "./home.ts";
 import { loadPlugin } from "./plugins.ts";
 import * as hub from "./runtime.ts";
-import { AuthError, NotFound } from "../kernel/errors.ts";
+import { AuthError, HistoryArchived, NotFound } from "../kernel/errors.ts";
 import { createHandler } from "../kernel/http.ts";
 
 /** Past this setTimeout fires at once. */
 const LONGEST_TIMER = 2147483647;
 
-function logStream(after: number, signal: AbortSignal, key: string) {
-  let cursor = after;
+function logStream(after: number | undefined, signal: AbortSignal, key: string) {
+  const boundary = hub.historyBoundary().seq;
+  let cursor = after ?? boundary;
+  if (cursor < boundary) throw new HistoryArchived(boundary);
   let unsubscribe = () => {};
   let stop = () => {};
   const detach = () => {
@@ -31,9 +33,10 @@ function logStream(after: number, signal: AbortSignal, key: string) {
       };
       send = () => {
         if (stopped) return;
-        if (!hub.whose("owner", key)) return stop();
+        if (!hub.whose("owner", key) || cursor < hub.historyBoundary().seq) return stop();
         if (controller.desiredSize! <= 0) return;
         for (const fact of hub.logAfter(cursor, 1)) {
+          if (fact.seq !== cursor + 1) return stop();
           cursor = fact.seq;
           const message = `id: ${fact.seq}\nevent: fact\ndata: ${JSON.stringify(fact)}\n\n`;
           controller.enqueue(new TextEncoder().encode(message));
@@ -106,7 +109,7 @@ export function makeHandler(commit = "dev") {
     environment: hub.environment,
     dispatch: hub.execute,
     state: hub.stateOf,
-    why: hub.why,
+    why: hub.explainRun,
     card: hub.cardByToken,
     wait(until, signal) {
       return new Promise((resolve) => {

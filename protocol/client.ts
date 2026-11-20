@@ -13,7 +13,12 @@ export function hubClient(url: string, key: string) {
   async function call(
     method: string,
     path: string,
-    { token = key, body, timeout = 30 }: { token?: string; body?: unknown; timeout?: number } = {},
+    {
+      token = key,
+      body,
+      timeout = 30,
+      withBoundary = false,
+    }: { token?: string; body?: unknown; timeout?: number; withBoundary?: boolean } = {},
   ) {
     const response = await fetch(base + path, {
       method,
@@ -26,7 +31,13 @@ export function hubClient(url: string, key: string) {
     try {
       data = text ? JSON.parse(text) : null;
     } catch {}
+    if (response.status === 410 && data?.error === "history_archived")
+      throw new HubError(410, `这段历史已归档，在线日志从检查点 #${data.checkpoint_seq} 之后开始。`);
     if (!response.ok) throw new HubError(response.status, data?.error ?? `中台返回 ${response.status}`);
+    if (withBoundary) {
+      const checkpoint_seq = Number(response.headers.get("X-Checkpoint-Seq"));
+      if (checkpoint_seq > 0) return { checkpoint_seq, facts: data };
+    }
     return data;
   }
   return {
@@ -49,7 +60,7 @@ export function hubClient(url: string, key: string) {
     // Sources, the owner and tasks elsewhere.
     event: (body: unknown) => call("POST", "/v1/events", { body }),
     tell: (body: unknown) => call("POST", "/v1/tell", { body }),
-    why: (id: number) => call("GET", `/v1/runs/${id}/why`),
+    why: (id: number, withBoundary = false) => call("GET", `/v1/runs/${id}/why`, { withBoundary }),
     removeKey: (kind: string, name: string) =>
       call("DELETE", `/v1/keys/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`),
     state: (before?: number) => call("GET", before === undefined ? "/v1/state" : `/v1/state?before=${before}`),

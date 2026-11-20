@@ -99,6 +99,7 @@ export function openView(db: DatabaseSync, format: string) {
   return new View(db, Number(saved.seq), JSON.parse(String(saved.next)), format);
 }
 export function commit(db: DatabaseSync, view: View, produce: () => Fact[]): View {
+  initialize(db);
   return transaction(db, () => {
     const latest = Number(
       statement(

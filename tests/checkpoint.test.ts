@@ -8,11 +8,23 @@ import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import { checkpointPath, fileDigest, loadCheckpoint, projectionFormat } from "../host/checkpoint.ts";
 import { replayCheck } from "../scripts/replay-check.ts";
-import { snapshot, type Fact } from "../kernel/evolve.ts";
+import { empty, snapshot, type Fact } from "../kernel/evolve.ts";
 import { commit, openView, rebuild } from "../kernel/store.ts";
 
 const fact = (seq: number, changes: Fact["changes"]): Fact => ({ version: 1, seq, at: seq, type: "test", changes });
 const tail = fact(3, [{ table: "cards", key: "1", row: { id: 1, version: 2 } }]);
+
+test("commit can bootstrap a separate legacy target from an empty view", () => {
+  const db = new DatabaseSync(":memory:");
+  const base = empty();
+  try {
+    db.exec("CREATE TABLE facts(seq INTEGER PRIMARY KEY, fact TEXT NOT NULL)");
+    assert.equal(commit(db, base, () => [fact(1, [])]).seq, 1);
+  } finally {
+    db.close();
+    base.close();
+  }
+});
 
 function fixture(t: TestContext, format = "candidate") {
   const dir = mkdtempSync(join(tmpdir(), "history-test-"));

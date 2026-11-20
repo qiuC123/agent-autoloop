@@ -49,4 +49,4 @@ ACP 的授权依赖 Agent 遵守协议。桥接只按结构化工具种类、编
 
 门的权限、通道回答人和原消息、轮次 token 的范围、重复回执与卡片回答都有行为和一致性检查。`sim/invariants.ts` 是模拟与穷举共用的不变量；夜间检查另外对真实 SQLite 进程做 SIGKILL。范围是进程崩溃和有限场景，不等同于断电恢复证明或完整安全审计。
 
-`kernel/` 不读时钟、不取随机数。判断、事实追加和 `evolve` 更新投影在同一 WAL + FULL 事务里完成，提交后才应答。正常启动复用带游标和编号高水位的投影；格式指纹变化时从日志逐条重建，不改变旧事实。`agent-autoloop why 42` 查一轮的事件、规则和回执；`GET /v1/stream?after=42` 供本人客户端按序号续读。备份要一起保留 `hub.db`、`maintenance.json` 和私有的 `master.key`（POSIX `0600`，Windows 当前用户 ACL）；后者推导轮次和卡片链接的 token。普通访问密钥只保存哈希；卡片链接查找索引也只保存 token 的哈希。
+`kernel/` 不读时钟、不取随机数。判断、事实追加和 `evolve` 更新投影在同一 WAL + FULL 事务里完成，提交后才应答。正常启动复用带游标和编号高水位的投影；未封存的库可以从头重放；封存后需要匹配的只读检查点、尾段及库内最新心跳状态。指纹变化须在离线归档上先建匹配检查点。`agent-autoloop why 42` 查一轮的事件、规则和回执；`GET /v1/stream?after=42` 供本人客户端按序号续读。备份要一起保留 SQLite 一致副本 `hub.db`、它登记的同名 `checkpoint-<sha256>.db`、`maintenance.json` 和私有的 `master.key`（POSIX `0600`，Windows 当前用户 ACL）；后者推导轮次和卡片链接的 token。普通访问密钥只保存哈希；卡片链接查找索引也只保存 token 的哈希。

@@ -167,7 +167,7 @@ MCP 客户端的启动程序填 `node`，参数为本机引擎绝对路径 `bin/
 
 接插件先在专用测试中台验证：`agent-autoloop conformance <地址> --config <测试凭据文件>`。文件里的 `keys` 分别放来源、接单程序、通道、本人密钥；`eventType` 匹配测试规则，`answerer` 在测试通道的允许名单内。检查会写事件和卡片，不指向正在用的中台。协议类型在 `protocol/schema.json`。
 
-`kernel/` 不读时钟、不取随机数。判断、事实追加和 `evolve` 更新投影在同一 WAL + FULL 事务里完成，提交后才应答。正常启动复用带游标和编号高水位的投影；格式指纹变化时从日志逐条重建，不改变旧事实。`agent-autoloop why 42` 查一轮的事件、规则和回执；`GET /v1/stream?after=42` 供本人客户端按序号续读。备份要一起保留 `hub.db`、`maintenance.json` 和私有的 `master.key`（POSIX `0600`，Windows 当前用户 ACL）；后者推导轮次和卡片链接的 token。普通访问密钥只保存哈希。
+`kernel/` 不读时钟、不取随机数。判断、事实追加和 `evolve` 更新投影在同一 WAL + FULL 事务里完成，提交后才应答。正常启动复用带游标和编号高水位的投影；未封存的库可以从头重放；封存后需要匹配的只读检查点、尾段及库内最新心跳状态。指纹变化须在离线归档上先建匹配检查点。`agent-autoloop why 42` 查一轮的事件、规则和回执；`GET /v1/stream?after=42` 供本人客户端按序号续读。备份要一起保留 SQLite 一致副本 `hub.db`、它登记的同名 `checkpoint-<sha256>.db`、`maintenance.json` 和私有的 `master.key`（POSIX `0600`，Windows 当前用户 ACL）；后者推导轮次和卡片链接的 token。普通访问密钥只保存哈希。
 
 ## 版本与卸载
 

@@ -197,7 +197,7 @@ export async function conformance(base: string, config: Probe, request: typeof f
   const why = await call(`/v1/runs/${job.run}/why`, keys.owner);
   assert.ok(why.some((fact: { type: string }) => fact.type === "finish"));
   const abort = new AbortController();
-  const stream = await request(base + "/v1/stream?after=0", {
+  const stream = await request(base + "/v1/stream", {
     headers: { authorization: `Bearer ${keys.owner}` },
     signal: abort.signal,
   });

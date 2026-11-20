@@ -53,11 +53,27 @@ Windows 的接单子进程初始化超过 300 秒或处理进度心跳中断超�
 
 安装器和中台启动时都会把数据目录设为 `0700`，Windows 则设置只有当前用户可访问的 ACL，包括已有目录，保护数据库、密钥及控制记录；本轮 Agent 资料目录按下文单独授权。运行时 ACL 使用系统 .NET 编译的私有辅助程序，身份查询、编译目录保护、编译及权限设置每次限 30 秒，仅超时重试一次；本轮准备失败交回 failed，不继续写秘密，不再为 ACL 启动 PowerShell。密钥文件在 POSIX 是 `0600`，Windows 同样限制当前用户。升级后同步重启中台与接单程序；新版 `status` 使用中台提供的费用汇总。
 
-升级时若投影格式有变化，会自动从旧日志逐条重建，历史多时首次启动需要等待；之后正常启动直接复用投影。原日志和已有卡片链接保留，不需要手动迁移。
+未封存的旧库升级时，投影指纹变化会触发全量重建。正常启动复用已持久化的投影。已封存库同时需要配套检查点，整理和升级流程见下文。
 
 使用回执 `ask` / `notice` 的 `continue: true` 前，同步升级中台和接单程序，旧版本会拒绝该字段。它可续用同事项同 key 最新卡，重新开放或切换类型；旧回执不变，回答历史由原事实日志重建投影，不写数据迁移。
 
 使用回执 `notice.fyi: true` 只告知卡片前，同步升级中台和接单程序；旧版本会拒绝该字段。它复用已有报告卡片与数据库字段，无需改表，旧通知仍是待办。新卡片没有按钮、不需要结案；普通 `notice` 仍用于需要本人做事的情况。
+
+## 检查点迁移与回退
+
+安装或升级引擎后，归档须显式运行。以下命令在引擎目录下执行，输入是 SQLite backup API 取得的一致副本。保存同一次备份的主密钥、维护文件及应用收件箱和运维状态。已有检查点的副本还要配上同目录的 `checkpoint-<sha256>.db`。演练和正式预建都使用一个尚不存在的私有输出目录。
+
+```sh
+node scripts/checkpoint.ts migrate <副本> <主密钥文件> <新目录> 1024
+node scripts/replay-check.ts <新目录>/work/hub.db <主密钥文件>
+node scripts/checkpoint.ts finalize <新目录> <停写后的同源副本> <主密钥文件>
+node scripts/checkpoint.ts rollback <新目录> <主密钥文件> <恢复输出目录>
+```
+
+- `migrate` 生成 `backup/`、`work/`、`archive/`。检查点包含所有投影及编号高水位，归档逐条解压核对；紧凑工作库经 `VACUUM INTO` 生成，完整重放和检查点加尾段逐表一致后才命名为 `work/hub.db`。已有归档时，在尾段条数后传包含历次压缩段的离线目录，用候选引擎重新全量对账。服务只需要 `work/` 中的数据库和检查点。
+- 尾段条数可选，默认上限 2,048 条且不超过 4 MiB。例中预留 1,024 条，给预建后的业务写入留空间。已有覆盖写心跳时，检查点取一致副本的当前水位，保留该时刻真实的在线与租约状态。
+- 排空工作后，以同一维护 ID 进入 hold，停写者后封住最终水位。用 `finalize` 在已对账的工作库上核对旧边界和保留尾段，补入新增事实及心跳。超过总尾段预算就继续使用旧库，重新预建。关闭旧库连接，并保留旧库及其 WAL 中已提交的事务；一起切换新的工作库和检查点。确认健康、实际版本、维护状态与收件箱后再用原 ID resume。
+- `rollback` 在新的目录恢复原备份并重新打开核对。预建库收到新增事实或心跳覆盖值后，命令会拒绝还原旧备份。此时保留当前数据，回退到能读取当前检查点的程序，或离线恢复到最终水位再核对。
 
 ## 临时 HOME、CI 或没有服务管理器
 
@@ -117,7 +133,7 @@ Claude 要委托 Codex 处理网页时，可用[浏览器交接模板](examples/
 
 支持维护 API 的引擎可先用本人密钥向 `POST /v1/maintenance` 发送 `drain`（带将来的 `deadline`），保存返回的 `id`；有 unknown 且结果不会回来时，本人核实旧执行已停止和实际业务状态，再用 `stop <轮次>` 或该轮通知的“已处理”按未完成结束；`GET` 看到 `claimed=0`、`unknown=0` 后，以该 ID 发送 `hold`，成功后再停服务、更新和启动。新进程仍保持 held；核对 `problem=null`、状态与生效规则的 `rules_version` / `rules_hash` 后，以同一 ID 显式 `resume`。到期不会自动恢复，要核对后 `renew` 再 resume。首次升级前的旧引擎尚不支持此流程；完整请求见[维护协议](docs/protocol.md#持久维护闸门)。
 
-`<home>/maintenance.json` 是宿主控制文件，不手动删除或改成 normal；缺损会关闭新领取，状态会说明问题。数据库中的宿主初始化标记让重启和投影重建也能识别文件丢失。备份、恢复时一起保留 `maintenance.json`、`hub.db` 和 `master.key`。
+`<home>/maintenance.json` 是宿主控制文件，不手动删除或改成 normal；缺损会关闭新领取，状态会说明问题。数据库中的宿主初始化标记让重启和投影重建也能识别文件丢失。备份、恢复时一起保留 `maintenance.json`、`hub.db`、它登记的检查点文件和 `master.key`。
 
 ## 卸载
 
@@ -138,7 +154,7 @@ agent-autoloop uninstall
 - [插件](docs/plugins.md)：三个可运行的最小例子。
 - [安全边界](SECURITY.md)：密钥、执行权限和交付审查。
 
-开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db`、`maintenance.json` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
+开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db`、它登记的检查点文件、`maintenance.json` 和 `master.key`；后者在 POSIX 权限应为 0600，Windows ACL 应只允许当前用户访问。
 
 Windows Codex 插件按当前权限模式和登录环境运行 `codex sandbox`，取得实际用户 SID 后，只授权本轮的 `agent/` 资料目录：`read` 只读，默认 `edit` 可读写。父目录里的 worker 轮次凭据、退出标记及启动参数不共享；`hub.db`、`master.key`、`secrets.env`、`config.json` 仍只由当前用户读取。不会修改沙箱配置或自动改用 `full`。
 

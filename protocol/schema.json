@@ -858,6 +858,10 @@
         "error": {
           "type": "string",
           "maxLength": 4000
+        },
+        "checkpoint_seq": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "required": ["error"],

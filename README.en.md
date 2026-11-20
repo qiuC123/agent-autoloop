@@ -220,7 +220,7 @@ The Feishu channel requires **lark-cli 1.0.99 or newer** to read card JSON from 
 The kernel is about 1,700 lines with zero runtime dependencies. It reads no clock, uses no randomness, and makes no outbound requests; plugins connect in, and credentials stay with the plugins that use them. Identical inputs always give identical results. It brings four proven systems patterns to command-line agents:
 
 - **Zero-cost wait**: The process exits while waiting for your call, and the waiting state lives in SQLite, so the agent does not stay alive. If you reply three days later, no agent process runs and no tokens are spent in the meantime — only the lightweight hub waits in the background; your answer resumes the original conversation.
-- **Event sourcing**: All state is derived from an append-only fact log, committed in the same SQLite transaction as its indexes before the hub replies. Confirmed facts survive `SIGKILL` (whole-machine power loss is not separately tested), every run can be traced with a single command, and format changes rebuild from the log without migration scripts.
+- **Event sourcing**: Business facts and projections commit together before the hub replies. Confirmed facts survive `SIGKILL`. Polling overwrites presence and lease timestamps. An explicit checkpoint seals a prefix into an offline archive. Online explanations cover runs created after that checkpoint.
 - **Code / data split**: Like parameterized SQL. Issue titles, bodies, and other external text are written only to a local data file, never into the prompt, which carries only character-checked types, IDs, and links; `rules.json` alone decides which agent runs, in which folder, and with what access. Events carrying `cwd`, `agent`, or `access` fields are rejected outright.
 - **Hop circuit breaker**: Like packet TTL in networking. Events returned by an agent can dispatch more agents, and the hop count keeps growing — across human questions and scheduled follow-ups too — and an agent cannot reset it. Past 8 hops, the kernel records the event, stops dispatching, and sends you a notice card.
 
@@ -260,7 +260,7 @@ Windows must still establish 1,000 real, concurrently waiting long polls and rec
 | Kernel lines (with comments and blanks) | 1,651 |
 | Runtime dependencies | 0 |
 
-As history grows, the status summary slows down and the log and indexes keep using disk. The first start after a format change rebuilds from the log, which took 43.1 seconds for 1.1 million facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
+As history grows, the status summary slows down and the log and indexes keep using disk. An unsealed database rebuilds from the entire log after a format change (43.1 seconds for 1.1 million facts). A sealed database recovers from its matching checkpoint and the retained tail. [Migration and rollback](INSTALL.md#检查点迁移与回退). [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
 
 ## Usage and provider terms
 

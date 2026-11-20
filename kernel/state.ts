@@ -2,6 +2,7 @@
 import type { SQLInputValue } from "node:sqlite";
 import { describeCron, dayStart, nextRun, parseCron } from "./cron.ts";
 import { iso, type Row } from "./evolve.ts";
+import { HistoryArchived } from "./errors.ts";
 import type { cardView } from "./query.ts";
 import { cronOf, eventRule, SCHEDULE, type Rules } from "./rules.ts";
 
@@ -36,6 +37,7 @@ type Reads = {
   all: <T>(sql: string, params?: SQLInputValue[]) => T[];
   view: (card: Row) => ReturnType<typeof cardView>;
   unrouted: () => Row[];
+  boundary: { seq: number; run: number };
 };
 
 const sum = (counted: Row[], field: string): number => counted.reduce((total, row) => total + row[field], 0);
@@ -59,7 +61,13 @@ function tally(counted: Row[]) {
   };
 }
 
-export function stateOf(now: number, before: number | undefined, rules: Rules, { all, view, unrouted }: Reads) {
+export function stateOf(
+  now: number,
+  before: number | undefined,
+  rules: Rules,
+  { all, view, unrouted, boundary }: Reads,
+) {
+  if (before !== undefined && before <= boundary.run) throw new HistoryArchived(boundary.seq);
   const seen = new Map(
     all<Row>("SELECT kind, name, seen_at FROM seen").map((row) => [`${row.kind}:${row.name}`, row.seen_at as string]),
   );
@@ -70,16 +78,17 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
   const counts = all<Row>(COUNTS, [iso(dayStart(now, rules.timezone))]);
   const openCards = all<Row>("SELECT * FROM cards WHERE state = 'open' ORDER BY id DESC");
   const recentCards = all<Row>("SELECT * FROM cards WHERE state <> 'open' ORDER BY id DESC LIMIT 20");
-  const older = before ? "WHERE id < ?" : "";
+  const older = before ? "AND id < ?" : "";
   const page = all<Row>(
-    `SELECT * FROM runs ${older} ORDER BY id DESC LIMIT ?`,
-    before ? [before, PAGE + 1] : [PAGE + 1],
+    `SELECT * FROM runs WHERE id > ? ${older} ORDER BY id DESC LIMIT ?`,
+    before ? [boundary.run, before, PAGE + 1] : [boundary.run, PAGE + 1],
   );
   const active = before ? [] : all<Row>("SELECT * FROM runs WHERE state IN ('queued', 'claimed', 'unknown')");
   const hasMore = page.length > PAGE;
   const byId = new Map([...page.slice(0, PAGE), ...active].map((run) => [run.id, run]));
   const visible = [...byId.values()].sort((a, b) => b.id - a.id);
   return {
+    ...(boundary.seq && { checkpoint_seq: boundary.seq }),
     now: iso(now),
     timezone: rules.timezone,
     spending: spendingOf(all, now, rules.timezone),
